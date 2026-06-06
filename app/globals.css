@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  /* 스크롤바 스타일 */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(240,237,232,0.15); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(240,237,232,0.3); }
+
+  /* 선택 색상 */
+  ::selection { background: rgba(200,241,53,0.25); color: #f0ede8; }
+}
+
+@layer components {
+  /* 자주 쓰는 버튼 패턴 */
+  .btn-lime {
+    @apply bg-lime text-ink font-syne font-bold rounded-full px-6 py-3
+           flex items-center gap-2 transition-opacity hover:opacity-85
+           text-sm cursor-pointer border-0;
+  }
+  .btn-ghost {
+    @apply bg-transparent text-sand/60 border border-white/10 rounded-full
+           px-5 py-3 text-sm font-dm transition-all cursor-pointer
+           hover:border-white/30 hover:text-sand;
+  }
+
+  /* 카드 패턴 */
+  .card-base {
+    @apply bg-panel border border-white/[0.07] rounded-2xl;
+  }
+
+  /* 뱃지 */
+  .badge-lime {
+    @apply bg-lime/10 border border-lime/20 text-lime
+           text-[11px] font-medium px-3 py-1 rounded-full
+           inline-flex items-center gap-1;
+  }
+  .badge-teal {
+    @apply bg-teal/10 border border-teal/20 text-teal
+           text-[11px] font-medium px-3 py-1 rounded-full;
+  }
+}
