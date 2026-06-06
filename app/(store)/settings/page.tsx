@@ -119,11 +119,21 @@ export default function SettingsPage() {
   }
 
   // 계정 삭제
-  async function deleteAccount() {
-    if (!confirm('정말 계정을 삭제할까요? 되돌릴 수 없어요.')) return
-    // 실제 삭제는 서버사이드(API Route)에서 supabaseAdmin 으로 처리해야 해요
-    alert('계정 삭제는 고객센터로 문의해주세요.')
-  }
+async function deleteAccount() {
+  if (!confirm('정말 계정을 삭제할까요? 구매 내역과 다운로드 권한도 모두 사라져요.')) return
+
+  const { data: { session } } = await supabase.auth.getSession()
+  const res = await fetch('/api/user/delete', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${session?.access_token}` },
+  })
+  const data = await res.json()
+
+  if (!res.ok) { alert(data.error); return }
+
+  await supabase.auth.signOut()
+  router.push('/')
+}
 
   if (loading) {
     return (

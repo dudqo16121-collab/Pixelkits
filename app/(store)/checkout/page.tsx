@@ -5,9 +5,19 @@ import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { getTemplateBySlug } from '@/lib/templates'
 import { formatPrice } from '@/lib/utils'
+import { supabase } from '@/lib/supabase'
 import type { Template } from '@/types'
 
 type PayMethod = 'card' | 'tosspay' | 'kakaopay'
+
+// 토스페이먼츠 loadTossPayments 타입 선언
+declare global {
+  interface Window {
+    TossPayments: (clientKey: string) => {
+      requestPayment: (method: string, options: Record<string, unknown>) => Promise<void>
+    }
+  }
+}
 
 export default function CheckoutPage() {
   const params = useSearchParams()
@@ -23,7 +33,26 @@ export default function CheckoutPage() {
   const [agreed,    setAgreed]    = useState(true)
   const [paying,    setPaying]    = useState(false)
   const [promoMsg,  setPromoMsg]  = useState('')
+  const [sdkReady,  setSdkReady]  = useState(false)
 
+  // 토스페이먼츠 SDK 스크립트 로드
+  useEffect(() => {
+    if (document.getElementById('toss-sdk')) { setSdkReady(true); return }
+    const script = document.createElement('script')
+    script.id  = 'toss-sdk'
+    script.src = 'https://js.tosspayments.com/v1/payment'
+    script.onload = () => setSdkReady(true)
+    document.head.appendChild(script)
+  }, [])
+
+  // 로그인 유저 이메일 자동 입력
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user?.email) setEmail(user.email)
+    })
+  }, [])
+
+  // 템플릿 로드
   useEffect(() => {
     if (!slug) return
     getTemplateBySlug(slug).then((t) => {
@@ -46,30 +75,66 @@ export default function CheckoutPage() {
     </div>
   )
 
-  const basePrice  = template.price ?? 0
-  const origPrice  = template.original_price ?? basePrice
-  const finalPrice = Math.max(0, basePrice - discount)
+  const basePrice   = template.price ?? 0
+  const origPrice   = template.original_price ?? basePrice
+  const finalPrice  = Math.max(0, basePrice - discount)
   const discountPct = origPrice > 0
     ? Math.round((1 - basePrice / origPrice) * 100)
     : 0
 
-  function applyPromo() {
-    if (promo.toUpperCase() === 'WELCOME10') {
-      const disc = Math.round(basePrice * 0.1)
-      setDiscount(disc)
-      setPromoMsg(`WELCOME10 적용 — ${formatPrice(disc)} 할인!`)
+  // 프로모 코드 검증 (서버 API로)
+  async function applyPromo() {
+    if (!promo.trim()) return
+    const res  = await fetch('/api/promo/validate', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ code: promo, templateSlug: slug }),
+    })
+    const data = await res.json()
+    if (data.discountAmount) {
+      setDiscount(data.discountAmount)
+      setPromoMsg(`${promo.toUpperCase()} 적용 — ${formatPrice(data.discountAmount)} 할인!`)
     } else {
-      setPromoMsg('유효하지 않은 코드입니다')
-      setTimeout(() => setPromoMsg(''), 2000)
+      setPromoMsg(data.error ?? '유효하지 않은 코드입니다')
+      setTimeout(() => setPromoMsg(''), 2500)
     }
   }
 
+  // 결제 실행
   async function handlePay() {
-    if (!email || !agreed) return
+    if (!email || !agreed || !sdkReady) return
     setPaying(true)
-    // 실제 구현 시 → 토스페이먼츠 SDK 호출
-    await new Promise((r) => setTimeout(r, 1000))
-    router.push(`/checkout/success?template=${slug}&email=${encodeURIComponent(email)}`)
+
+    try {
+      const tossClientKey = process.env.NEXT_PUBLIC_TOSS_CLIENT_KEY!
+      const tossPayments  = window.TossPayments(tossClientKey)
+
+      // 주문 ID: 토스가 요구하는 고유 값 (6~64자, 영문·숫자·-_)
+      const tossOrderId = `PKT-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+
+      const methodMap: Record<PayMethod, string> = {
+        card:     '카드',
+        tosspay:  '토스페이',
+        kakaopay: '카카오페이',
+      }
+
+      await tossPayments.requestPayment(methodMap[method], {
+        amount:      finalPrice,
+        orderId:     tossOrderId,
+        orderName: `${template?.name ?? 'pixelkits 템플릿'} — pixelkits`,
+        customerEmail: email,
+        // 성공/실패 시 리다이렉트 URL
+        successUrl: `${window.location.origin}/checkout/success?template=${slug}&orderId=${tossOrderId}&promoCode=${promo}`,
+        failUrl:    `${window.location.origin}/checkout?template=${slug}&error=payment_failed`,
+      })
+      // requestPayment 는 성공 시 successUrl 로 리다이렉트하므로 아래 코드는 실행되지 않음
+    } catch (err: unknown) {
+      // 유저가 결제 창을 닫은 경우 등
+      if (err instanceof Error && err.message !== 'User Cancel') {
+        console.error('[결제 오류]', err)
+      }
+      setPaying(false)
+    }
   }
 
   const METHODS: { id: PayMethod; label: string; sub: string }[] = [
@@ -80,11 +145,13 @@ export default function CheckoutPage() {
 
   return (
     <div className="grid md:grid-cols-[1fr_360px] min-h-[calc(100vh-57px)]">
+
       {/* ── 왼쪽: 결제 폼 ── */}
       <div className="p-8 md:px-12 border-r border-white/[0.07]">
+
         {/* 진행 단계 */}
         <div className="flex items-center gap-2 mb-10 text-[13px]">
-          {['상품 선택','결제 정보','다운로드'].map((step, i) => (
+          {['상품 선택', '결제 정보', '다운로드'].map((step, i) => (
             <div key={step} className="flex items-center gap-2">
               {i > 0 && <span className="w-8 h-px bg-white/10" />}
               <div className={`flex items-center gap-2 ${i === 1 ? '' : 'opacity-50'}`}>
@@ -107,11 +174,14 @@ export default function CheckoutPage() {
           <label className="text-[12px] text-sand/45 mb-1.5 block">
             결제 완료 후 다운로드 링크를 보내드려요
           </label>
-          <input type="email" value={email}
+          <input
+            type="email"
+            value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="hello@example.com"
             className="w-full bg-panel border border-white/10 rounded-xl px-4 py-3 text-[14px]
-                       text-sand placeholder:text-sand/20 outline-none focus:border-lime/40 transition-colors" />
+                       text-sand placeholder:text-sand/20 outline-none focus:border-lime/40 transition-colors"
+          />
         </div>
         <p className="text-[12px] text-sand/30 mb-7">스팸 없음 · 다운로드 링크 + 영수증만 발송됩니다</p>
 
@@ -121,105 +191,80 @@ export default function CheckoutPage() {
         <h2 className="font-syne font-bold text-[17px] mb-4">결제 수단</h2>
         <div className="flex gap-2.5 mb-7">
           {METHODS.map(({ id, label, sub }) => (
-            <button key={id} onClick={() => setMethod(id)}
+            <button
+              key={id}
+              onClick={() => setMethod(id)}
               className={`flex-1 card-base rounded-xl p-3.5 flex items-center gap-2.5 transition-all cursor-pointer
-                ${method === id ? 'border-lime/40 bg-lime/[0.05]' : 'hover:border-white/20'}`}>
+                ${method === id ? 'border-lime/40 bg-lime/[0.05]' : 'hover:border-white/20'}`}
+            >
               <div>
                 <p className="text-[13px] font-medium text-left">{label}</p>
                 <p className="text-[11px] text-sand/35 text-left">{sub}</p>
               </div>
               <div className={`w-4 h-4 rounded-full border ml-auto flex-shrink-0 flex items-center justify-center
-                ${method === id ? 'border-lime' : 'border-white/20'}`}>
-                {method === id && <div className="w-2 h-2 rounded-full bg-lime" />}
+                ${method === id ? 'border-lime bg-lime' : 'border-white/20'}`}>
+                {method === id && <div className="w-2 h-2 rounded-full bg-ink" />}
               </div>
             </button>
           ))}
         </div>
 
-        {/* 카드 폼 */}
-        {method === 'card' && (
-          <div className="space-y-3 mb-7">
-            <div>
-              <label className="text-[12px] text-sand/45 mb-1.5 block">카드 번호</label>
-              <input placeholder="0000  0000  0000  0000"
-                className="w-full bg-panel border border-white/10 rounded-xl px-4 py-3 text-[14px]
-                           text-sand placeholder:text-sand/20 outline-none focus:border-lime/40 transition-colors tracking-widest" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[12px] text-sand/45 mb-1.5 block">유효기간</label>
-                <input placeholder="MM / YY"
-                  className="w-full bg-panel border border-white/10 rounded-xl px-4 py-3 text-[14px]
-                             text-sand placeholder:text-sand/20 outline-none focus:border-lime/40 transition-colors" />
-              </div>
-              <div>
-                <label className="text-[12px] text-sand/45 mb-1.5 block">CVC</label>
-                <input placeholder="000"
-                  className="w-full bg-panel border border-white/10 rounded-xl px-4 py-3 text-[14px]
-                             text-sand placeholder:text-sand/20 outline-none focus:border-lime/40 transition-colors" />
-              </div>
-            </div>
-          </div>
-        )}
+        <div className="h-px bg-white/[0.07] mb-7" />
 
         {/* 약관 동의 */}
-        <div className="flex items-start gap-2.5">
-          <button onClick={() => setAgreed(!agreed)}
-            className={`w-5 h-5 rounded border flex-shrink-0 mt-0.5 flex items-center justify-center transition-colors cursor-pointer
-              ${agreed ? 'bg-lime border-lime' : 'bg-transparent border-white/15'}`}>
-            {agreed && <span className="text-ink text-[11px] font-bold">✓</span>}
-          </button>
-          <p className="text-[12px] text-sand/40 leading-relaxed">
-            <span className="text-lime cursor-pointer hover:underline">이용약관</span> 및{' '}
-            <span className="text-lime cursor-pointer hover:underline">개인정보처리방침</span>에 동의하며,
-            디지털 상품 특성상 다운로드 후 환불이 제한될 수 있음을 확인합니다.
-          </p>
-        </div>
+        <label className="flex items-start gap-3 cursor-pointer mb-8">
+          <input
+            type="checkbox"
+            checked={agreed}
+            onChange={(e) => setAgreed(e.target.checked)}
+            className="mt-0.5 accent-lime"
+          />
+          <span className="text-[13px] text-sand/50 leading-relaxed">
+            구매 조건 및{' '}
+            <a href="/terms" className="text-lime/70 underline" target="_blank">이용약관</a>을 확인하였으며 동의합니다
+          </span>
+        </label>
       </div>
 
       {/* ── 오른쪽: 주문 요약 ── */}
-      <div className="p-7 bg-[#0d0d0d]">
-        <h2 className="font-syne font-bold text-[15px] text-sand/40 uppercase tracking-wider mb-5">
-          주문 요약
-        </h2>
-
-        {/* 상품 */}
-        <div className="card-base rounded-xl p-4 flex items-start gap-3.5 mb-4">
-          {template.thumbnail_url ? (
-            <img src={template.thumbnail_url} alt={template.name}
-              className="w-14 h-11 rounded-lg object-cover flex-shrink-0 border border-white/10" />
-          ) : (
-            <div className="w-14 h-11 rounded-lg bg-gradient-to-br from-[#0d1b2a] to-[#1e3a5f]
-                            flex-shrink-0 border border-white/10" />
-          )}
-          <div className="flex-1 min-w-0">
-            <p className="text-[14px] font-medium truncate">{template.name}</p>
-            <p className="text-[12px] text-sand/35 mt-0.5">
-              {template.stack?.join(' · ')} · 평생 업데이트
-            </p>
+      <div className="p-8 bg-white/[0.02]">
+        {/* 상품 정보 */}
+        <div className="card-base rounded-2xl p-4 flex gap-3 mb-6">
+          <div className="w-16 h-12 rounded-xl bg-gradient-to-br from-[#0d1b2a] to-[#1e3a5f] border border-white/10 flex-shrink-0" />
+          <div>
+            <p className="text-[14px] font-medium mb-1">{template.name}</p>
+            <div className="flex gap-2 text-[12px] text-sand/35">
+              {template.stack.slice(0, 2).map((s) => <span key={s}>⬡ {s}</span>)}
+            </div>
           </div>
-          <span className="font-syne font-bold text-[15px] text-lime flex-shrink-0">
-            {formatPrice(origPrice)}
-          </span>
         </div>
 
         {/* 프로모 코드 */}
-        <div className="flex gap-2 mb-5">
-          <input value={promo} onChange={(e) => setPromo(e.target.value)}
-            placeholder="할인 코드 입력"
-            className="flex-1 bg-panel border border-white/10 rounded-xl px-4 py-3 text-[13px]
-                       text-sand placeholder:text-sand/20 outline-none focus:border-lime/40 transition-colors" />
-          <button onClick={applyPromo}
-            className="bg-white/[0.06] border border-white/10 rounded-xl px-4 text-[13px]
-                       text-sand/60 hover:text-sand transition-colors cursor-pointer">
-            적용
-          </button>
+        <div className="mb-5">
+          <p className="text-[12px] text-sand/45 mb-2">프로모션 코드</p>
+          <div className="flex gap-2">
+            <input
+              value={promo}
+              onChange={(e) => setPromo(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && applyPromo()}
+              placeholder="코드 입력"
+              className="flex-1 bg-panel border border-white/10 rounded-xl px-3 py-2.5 text-[13px]
+                         text-sand placeholder:text-sand/20 outline-none focus:border-lime/40 transition-colors uppercase"
+            />
+            <button
+              onClick={applyPromo}
+              className="bg-white/[0.07] border border-white/10 rounded-xl px-4 text-[13px]
+                         hover:border-white/20 transition-colors cursor-pointer"
+            >
+              적용
+            </button>
+          </div>
+          {promoMsg && (
+            <p className={`text-[12px] mt-1.5 ${promoMsg.includes('적용') ? 'text-teal' : 'text-[#ff5f3f]'}`}>
+              {promoMsg}
+            </p>
+          )}
         </div>
-        {promoMsg && (
-          <p className={`text-[12px] mb-4 -mt-2 ${promoMsg.includes('적용') ? 'text-teal' : 'text-[#ff5f3f]'}`}>
-            {promoMsg}
-          </p>
-        )}
 
         {/* 가격 분해 */}
         <div className="space-y-2.5 mb-4">
@@ -253,10 +298,12 @@ export default function CheckoutPage() {
         </div>
 
         {/* 결제 버튼 */}
-        <button onClick={handlePay}
-          disabled={!email || !agreed || paying}
+        <button
+          onClick={handlePay}
+          disabled={!email || !agreed || paying || !sdkReady}
           className="btn-lime w-full justify-center text-[15px] py-4 rounded-2xl mb-3
-                     disabled:opacity-40 disabled:cursor-not-allowed">
+                     disabled:opacity-40 disabled:cursor-not-allowed"
+        >
           {paying ? '처리 중...' : `🔒 ${formatPrice(finalPrice)} 결제하기`}
         </button>
 
