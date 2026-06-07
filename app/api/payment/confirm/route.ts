@@ -6,30 +6,19 @@ import { rateLimit, getIP } from '@/lib/rateLimit'
 export async function POST(req: NextRequest) {
   try {
     // ── 0. Rate Limiting ──────────────────────────────────
-    const ip     = getIP(req)
+    const ip         = getIP(req)
     const authHeader = req.headers.get('Authorization')
-    const rlKey  = authHeader ? `payment:${authHeader.slice(-12)}` : `payment:${ip}`
-    const rl     = rateLimit(rlKey, 5, 60_000) // 1분에 5회
+    const rlKey      = authHeader ? `payment:${authHeader.slice(-12)}` : `payment:${ip}`
+    const rl         = rateLimit(rlKey, 5, 60_000)
 
     if (!rl.allowed) {
       return NextResponse.json(
         { error: '요청이 너무 많아요. 잠시 후 다시 시도해주세요.' },
-        {
-          status: 429,
-          headers: { 'Retry-After': String(Math.ceil((rl.resetAt - Date.now()) / 1000)) },
-        }
+        { status: 429, headers: { 'Retry-After': String(Math.ceil((rl.resetAt - Date.now()) / 1000)) } }
       )
     }
 
-    const {
-      paymentKey,
-      orderId,
-      amount,
-      templateSlug,
-      email,
-      paymentMethod,
-      promoCode,
-    } = await req.json()
+    const { paymentKey, orderId, amount, templateSlug, email, paymentMethod, promoCode } = await req.json()
 
     // ── 1. 필수값 검증 ────────────────────────────────────
     if (!paymentKey || !orderId || !templateSlug || !email) {
@@ -45,20 +34,13 @@ export async function POST(req: NextRequest) {
 
       const tossRes = await fetch('https://api.tosspayments.com/v1/payments/confirm', {
         method: 'POST',
-        headers: {
-          Authorization:  `Basic ${basicToken}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { Authorization: `Basic ${basicToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ paymentKey, orderId, amount }),
       })
-
       const tossData = await tossRes.json()
       if (!tossRes.ok) {
         console.error('[Toss] 결제 승인 실패:', tossData)
-        return NextResponse.json(
-          { error: tossData.message ?? '결제 승인에 실패했어요' },
-          { status: 400 }
-        )
+        return NextResponse.json({ error: tossData.message ?? '결제 승인에 실패했어요' }, { status: 400 })
       }
     }
 
@@ -69,15 +51,58 @@ export async function POST(req: NextRequest) {
       .eq('slug', templateSlug)
       .single()
 
-    if (tmplErr || !template) {
-      return NextResponse.json({ error: '템플릿을 찾을 수 없어요' }, { status: 404 })
-    }
-    if (!template.is_published) {
-      return NextResponse.json({ error: '비공개 템플릿입니다' }, { status: 403 })
+    if (tmplErr || !template) return NextResponse.json({ error: '템플릿을 찾을 수 없어요' }, { status: 404 })
+    if (!template.is_published) return NextResponse.json({ error: '비공개 템플릿입니다' }, { status: 403 })
+
+    // ── 4. 로그인 유저 확인 ───────────────────────────────
+    // (쿠폰 소모 전에 중복 구매를 먼저 체크하기 위해 앞으로 이동)
+    let userId: string | null = null
+    if (authHeader?.startsWith('Bearer ')) {
+      const token = authHeader.replace('Bearer ', '')
+      const { data: { user } } = await supabaseAdmin.auth.getUser(token)
+      userId = user?.id ?? null
     }
 
-    // ── 4. 프로모 코드 검증 & 할인 계산 ──────────────────
+    // ── 4-1. 중복 구매 방지 (쿠폰 소모 전에 체크) ────────
+    if (userId) {
+      // 로그인 유저: user_id 기준
+      const { data: existing } = await supabaseAdmin
+        .from('orders')
+        .select('id, order_number')
+        .eq('user_id', userId)
+        .eq('template_id', template.id)
+        .eq('status', 'completed')
+        .maybeSingle()
+
+      if (existing) {
+        return NextResponse.json(
+          { error: '이미 구매한 템플릿이에요.', code: 'ALREADY_PURCHASED', orderNumber: existing.order_number },
+          { status: 409 }
+        )
+      }
+    } else {
+      // 비로그인 유저: 이메일 기준
+      const { data: existing } = await supabaseAdmin
+        .from('orders')
+        .select('id, order_number')
+        .eq('user_email', email)
+        .eq('template_id', template.id)
+        .eq('status', 'completed')
+        .maybeSingle()
+
+      if (existing) {
+        return NextResponse.json(
+          { error: '이 이메일로 이미 구매한 템플릿이에요.', code: 'ALREADY_PURCHASED', orderNumber: existing.order_number },
+          { status: 409 }
+        )
+      }
+    }
+
+    // ── 5. 프로모 코드 검증 & 할인 계산 ──────────────────
+    // (중복 구매 확인 후 쿠폰 소모 — rollback 문제 해소)
     let discountAmount = 0
+    let promoCodeUsed: string | null = null
+
     if (promoCode) {
       const { data: promo } = await supabaseAdmin
         .from('promo_codes')
@@ -92,6 +117,7 @@ export async function POST(req: NextRequest) {
         (!promo.max_uses    || promo.used_count < promo.max_uses)
       ) {
         discountAmount = Math.round(template.price * (promo.discount_percent / 100))
+        promoCodeUsed  = promo.code
         await supabaseAdmin
           .from('promo_codes')
           .update({ used_count: promo.used_count + 1 })
@@ -101,47 +127,39 @@ export async function POST(req: NextRequest) {
 
     const expectedAmount = Math.max(0, template.price - discountAmount)
 
-    // ── 5. 금액 무결성 검증 ───────────────────────────────
-    if (isFree) {
-      if (expectedAmount !== 0) {
-        return NextResponse.json({ error: '유료 템플릿은 무료로 받을 수 없어요' }, { status: 400 })
-      }
-    } else {
-      if (amount !== expectedAmount) {
-        console.error('[Security] 금액 불일치:', { amount, expectedAmount })
-        return NextResponse.json({ error: '결제 금액이 일치하지 않아요' }, { status: 400 })
-      }
-    }
-
-    // ── 6. 로그인 유저 확인 ───────────────────────────────
-    let userId: string | null = null
-    if (authHeader?.startsWith('Bearer ')) {
-      const token = authHeader.replace('Bearer ', '')
-      const { data: { user } } = await supabaseAdmin.auth.getUser(token)
-      userId = user?.id ?? null
-    }
-
-    // ── 6-1. 중복 구매 방지 ───────────────────────────────
-    if (userId) {
-      const { data: existing } = await supabaseAdmin
-        .from('orders')
-        .select('id, order_number')
-        .eq('user_id', userId)
-        .eq('template_id', template.id)
-        .eq('status', 'completed')
-        .maybeSingle()
-
-      if (existing) {
-        return NextResponse.json(
-          {
-            error:       '이미 구매한 템플릿이에요.',
-            code:        'ALREADY_PURCHASED',
-            orderNumber: existing.order_number,
-          },
-          { status: 409 }
-        )
+// ── 6. 금액 무결성 검증 ───────────────────────────────
+if (isFree) {
+  if (expectedAmount !== 0) {
+    // 쿠폰 롤백
+    if (promoCodeUsed) {
+      const { data: promo } = await supabaseAdmin
+        .from('promo_codes').select('used_count').eq('code', promoCodeUsed).single()
+      if (promo && promo.used_count > 0) {
+        await supabaseAdmin
+          .from('promo_codes')
+          .update({ used_count: promo.used_count - 1 })
+          .eq('code', promoCodeUsed)
       }
     }
+    return NextResponse.json({ error: '유료 템플릿은 무료로 받을 수 없어요' }, { status: 400 })
+  }
+} else {
+  if (amount !== expectedAmount) {
+    // 쿠폰 롤백
+    if (promoCodeUsed) {
+      const { data: promo } = await supabaseAdmin
+        .from('promo_codes').select('used_count').eq('code', promoCodeUsed).single()
+      if (promo && promo.used_count > 0) {
+        await supabaseAdmin
+          .from('promo_codes')
+          .update({ used_count: promo.used_count - 1 })
+          .eq('code', promoCodeUsed)
+      }
+    }
+    console.error('[Security] 금액 불일치:', { amount, expectedAmount })
+    return NextResponse.json({ error: '결제 금액이 일치하지 않아요' }, { status: 400 })
+  }
+}
 
     // ── 7. orders 테이블에 저장 ───────────────────────────
     const { data: order, error: orderErr } = await supabaseAdmin
@@ -153,7 +171,7 @@ export async function POST(req: NextRequest) {
         amount:          expectedAmount,
         original_amount: template.original_price ?? template.price,
         discount_amount: discountAmount,
-        promo_code:      promoCode ?? null,
+        promo_code:      promoCodeUsed ?? null,
         payment_method:  isFree ? 'free' : paymentMethod,
         payment_key:     isFree ? null   : paymentKey,
         toss_order_id:   orderId,
@@ -168,9 +186,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 8. 템플릿 다운로드 카운트 증가 (RPC) ─────────────
-    await supabaseAdmin.rpc('increment_template_download_count', {
-      template_id: template.id,
-    })
+    await supabaseAdmin.rpc('increment_template_download_count', { template_id: template.id })
 
     // ── 9. 구매 완료 이메일 발송 ──────────────────────────
     sendPurchaseEmail({
@@ -184,6 +200,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success:        true,
+      orderId:        order.id,
       orderNumber:    order.order_number,
       downloadToken:  order.download_token,
       tokenExpiresAt: order.token_expires_at,

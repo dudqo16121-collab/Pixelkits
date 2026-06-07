@@ -12,14 +12,19 @@ interface UserRow {
   total_spent: number
 }
 
+type SortBy  = 'created' | 'spent' | 'orders'
+type SortDir = 'desc' | 'asc'
+
 export default function AdminUsersPage() {
-  const [users,        setUsers]        = useState<UserRow[]>([])
-  const [loading,      setLoading]      = useState(true)
-  const [query,        setQuery]        = useState('')
-  const [selected,     setSelected]     = useState<UserRow | null>(null)
-  const [orders,       setOrders]       = useState<any[]>([])
-  const [loadingOrders,setLoadingOrders]= useState(false)
-  const [togglingId,   setTogglingId]   = useState<string | null>(null)
+  const [users,         setUsers]         = useState<UserRow[]>([])
+  const [loading,       setLoading]       = useState(true)
+  const [query,         setQuery]         = useState('')
+  const [sortBy,        setSortBy]        = useState<SortBy>('created')
+  const [sortDir,       setSortDir]       = useState<SortDir>('desc')
+  const [selected,      setSelected]      = useState<UserRow | null>(null)
+  const [orders,        setOrders]        = useState<any[]>([])
+  const [loadingOrders, setLoadingOrders] = useState(false)
+  const [togglingId,    setTogglingId]    = useState<string | null>(null)
 
   useEffect(() => { fetchUsers() }, [])
 
@@ -55,11 +60,24 @@ export default function AdminUsersPage() {
     setTogglingId(null)
   }
 
-  const filtered = users.filter((u) =>
-    !query ||
-    u.email?.includes(query) ||
-    (u.name ?? '').includes(query)
-  )
+  function handleSort(col: SortBy) {
+    if (sortBy === col) setSortDir((d) => d === 'desc' ? 'asc' : 'desc')
+    else { setSortBy(col); setSortDir('desc') }
+  }
+
+  const filtered = users
+    .filter((u) =>
+      !query ||
+      u.email?.includes(query) ||
+      (u.name ?? '').includes(query)
+    )
+    .sort((a, b) => {
+      let diff = 0
+      if (sortBy === 'created') diff = new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      if (sortBy === 'spent')   diff = b.total_spent - a.total_spent
+      if (sortBy === 'orders')  diff = b.order_count - a.order_count
+      return sortDir === 'desc' ? diff : -diff
+    })
 
   function timeAgo(iso: string) {
     const diff = Date.now() - new Date(iso).getTime()
@@ -68,6 +86,22 @@ export default function AdminUsersPage() {
     if (days < 30)  return `${days}일 전`
     if (days < 365) return `${Math.floor(days / 30)}개월 전`
     return `${Math.floor(days / 365)}년 전`
+  }
+
+  function SortBtn({ col, label }: { col: SortBy; label: string }) {
+    const active = sortBy === col
+    return (
+      <button
+        onClick={() => handleSort(col)}
+        className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-[12px] border
+                    transition-all cursor-pointer
+          ${active
+            ? 'bg-lime/[0.08] border-lime/25 text-lime'
+            : 'border-white/10 text-sand/40 hover:text-sand hover:border-white/20'}`}>
+        {label}
+        {active && <span className="text-[10px]">{sortDir === 'desc' ? '↓' : '↑'}</span>}
+      </button>
+    )
   }
 
   return (
@@ -80,7 +114,7 @@ export default function AdminUsersPage() {
       </div>
 
       {/* 검색 */}
-      <div className="relative mb-6">
+      <div className="relative mb-4">
         <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sand/25 text-lg">⌕</span>
         <input
           type="text"
@@ -91,6 +125,14 @@ export default function AdminUsersPage() {
                      text-[14px] text-sand placeholder:text-sand/20
                      outline-none focus:border-lime/40 transition-colors"
         />
+      </div>
+
+      {/* 정렬 버튼 */}
+      <div className="flex items-center gap-2 mb-6">
+        <p className="text-[12px] text-sand/30 mr-1">정렬:</p>
+        <SortBtn col="created" label="가입일"  />
+        <SortBtn col="spent"   label="결제액"  />
+        <SortBtn col="orders"  label="구매 수" />
       </div>
 
       {/* 테이블 */}
@@ -241,7 +283,9 @@ export default function AdminUsersPage() {
                           : o.status === 'refunded'
                           ? 'bg-[#ff5f3f]/10 text-[#ff5f3f] border-[#ff5f3f]/20'
                           : 'bg-white/[0.05] text-sand/40 border-white/10'}`}>
-                        {o.status === 'completed' ? '완료' : o.status === 'refunded' ? '환불' : o.status}
+                        {o.status === 'completed' ? '완료'
+                          : o.status === 'refunded' ? '환불'
+                          : o.status}
                       </span>
                       <span className="font-syne font-bold text-[13px] text-lime flex-shrink-0">
                         {o.amount > 0 ? `₩${o.amount.toLocaleString()}` : '무료'}

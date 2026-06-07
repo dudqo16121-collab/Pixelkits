@@ -9,6 +9,7 @@ export interface OrderWithTemplate {
   amount:             number
   original_amount:    number
   discount_amount:    number
+  refunded_amount:    number
   payment_method:     string
   status:             string
   download_token:     string
@@ -48,7 +49,7 @@ export function useOrders() {
         templates ( name, slug, stack )
       `)
       .eq('user_id', userId!)
-      .eq('status', 'completed')
+      .in('status', ['completed', 'partial_refund', 'refunded'])
       .order('created_at', { ascending: false })
 
     setOrders((data ?? []) as unknown as OrderWithTemplate[])

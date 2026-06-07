@@ -13,7 +13,10 @@ const SIDEBAR = [
   { label: '계정 설정',   href: '/settings'  },
 ]
 const METHOD_LABEL: Record<string, string> = {
-  card: '신용카드', tosspay: '토스페이', kakaopay: '카카오페이', free: '무료',
+  card:     '신용카드',
+  tosspay:  '토스페이',
+  kakaopay: '카카오페이',
+  free:     '무료',
 }
 
 export default function OrdersPage() {
@@ -61,9 +64,9 @@ export default function OrdersPage() {
         {/* 요약 카드 */}
         <div className="grid grid-cols-3 gap-3 mb-7">
           {[
-            { label: '총 구매 금액',  val: formatPrice(totalAmount), sub: `${orders.length}건 구매`,  color: ''         },
-            { label: '절약한 금액',   val: formatPrice(totalSaved),  sub: '할인 포함',                color: 'text-teal' },
-            { label: '다운로드 가능', val: `${orders.length}`,       sub: '평생 접근 가능',           color: 'text-lime' },
+            { label: '총 구매 금액',  val: formatPrice(totalAmount), sub: `${orders.length}건 구매`,  color: ''          },
+            { label: '절약한 금액',   val: formatPrice(totalSaved),  sub: '할인 포함',                color: 'text-teal'  },
+            { label: '다운로드 가능', val: `${orders.filter(o => o.status === 'completed').length}`, sub: '평생 접근 가능', color: 'text-lime' },
           ].map(({ label, val, sub, color }) => (
             <div key={label} className="card-base rounded-xl p-4">
               <p className="text-[12px] text-sand/35 mb-1.5">{label}</p>
@@ -73,6 +76,7 @@ export default function OrdersPage() {
           ))}
         </div>
 
+        {/* 로딩 */}
         {loading && (
           <div className="flex items-center gap-3 py-16 justify-center text-sand/30">
             <div className="w-5 h-5 border-2 border-lime/30 border-t-lime rounded-full animate-spin" />
@@ -80,6 +84,7 @@ export default function OrdersPage() {
           </div>
         )}
 
+        {/* 빈 상태 */}
         {!loading && orders.length === 0 && (
           <div className="text-center py-20 text-sand/30">
             <p className="text-4xl mb-4">🧾</p>
@@ -88,18 +93,28 @@ export default function OrdersPage() {
           </div>
         )}
 
+        {/* 주문 목록 */}
         {!loading && orders.length > 0 && (
           <div className="space-y-3">
             {orders.map((order) => {
               const tmpl      = order.templates
               const isExpired = new Date(order.token_expires_at) < new Date()
 
+              // 상태 뱃지
+              const statusBadge = {
+                completed:      { label: '✓ 완료',   cls: 'bg-teal/12 text-teal border-teal/20'                      },
+                partial_refund: { label: '부분환불', cls: 'bg-amber-500/12 text-amber-400 border-amber-500/20'        },
+                refunded:       { label: '전액환불', cls: 'bg-[#ff5f3f]/12 text-[#ff5f3f] border-[#ff5f3f]/20'       },
+              }[order.status] ?? { label: order.status, cls: 'bg-white/[0.07] text-sand/40 border-white/10' }
+
               return (
                 <div key={order.id}
                   className={`card-base rounded-2xl overflow-hidden transition-colors
                     ${open === order.id ? 'border-lime/20' : 'hover:border-white/14'}`}>
 
-                  <div className="flex items-center gap-4 p-5 cursor-pointer"
+                  {/* 헤더 행 */}
+                  <div
+                    className="flex items-center gap-4 p-5 cursor-pointer"
                     onClick={() => setOpen(open === order.id ? null : order.id)}>
                     <div className="w-14 h-11 rounded-xl bg-gradient-to-br from-[#0d1b2a] to-[#1e3a5f]
                                     flex-shrink-0 border border-white/10" />
@@ -109,13 +124,17 @@ export default function OrdersPage() {
                         {formatDate(order.created_at)} · #{order.order_number}
                       </p>
                     </div>
-                    <span className="badge-teal text-[11px] px-2.5 py-1">✓ 완료</span>
+                    {/* 동적 상태 뱃지 */}
+                    <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${statusBadge.cls}`}>
+                      {statusBadge.label}
+                    </span>
                     <span className="font-syne font-bold text-[15px] text-lime">
                       {formatPrice(order.amount)}
                     </span>
                     <span className={`text-sand/25 transition-transform text-[11px] ${open === order.id ? 'rotate-180' : ''}`}>▾</span>
                   </div>
 
+                  {/* 펼쳐진 상세 */}
                   {open === order.id && (
                     <div className="border-t border-white/[0.06] p-5 grid grid-cols-2 gap-5">
                       <div>
@@ -124,11 +143,14 @@ export default function OrdersPage() {
                           { k: '결제 수단', v: METHOD_LABEL[order.payment_method] ?? order.payment_method },
                           { k: '결제 금액', v: formatPrice(order.amount) },
                           { k: '할인 금액', v: order.discount_amount > 0 ? `-${formatPrice(order.discount_amount)}` : '없음' },
+                          ...(order.refunded_amount > 0 ? [
+                            { k: '환불 금액', v: `-${formatPrice(order.refunded_amount)}` },
+                          ] : []),
                           { k: '라이선스',  v: '상업적 사용 가능' },
                         ].map(({ k, v }) => (
                           <div key={k} className="flex justify-between text-[12px] py-1.5 border-b border-white/[0.04]">
                             <span className="text-sand/40">{k}</span>
-                            <span>{v}</span>
+                            <span className={k === '환불 금액' ? 'text-[#ff5f3f]/70' : ''}>{v}</span>
                           </div>
                         ))}
                       </div>
@@ -149,18 +171,18 @@ export default function OrdersPage() {
                       </div>
 
                       <div className="col-span-2 flex gap-2 pt-2 border-t border-white/[0.06] flex-wrap">
-                        {!isExpired ? (
+                        {order.status === 'completed' && !isExpired ? (
                           <Link href="/downloads" className="btn-lime text-[12px] px-4 py-2">
                             ⬇ 다운로드 페이지
                           </Link>
-                        ) : (
+                        ) : order.status === 'completed' && isExpired ? (
                           <button
                             onClick={() => refreshToken(order.id)}
                             disabled={refreshing === order.id}
                             className="btn-lime text-[12px] px-4 py-2 disabled:opacity-50">
                             {refreshing === order.id ? '재발급 중...' : '↻ 링크 재발급'}
                           </button>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   )}

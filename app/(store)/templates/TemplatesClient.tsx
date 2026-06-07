@@ -1,6 +1,5 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
-import Link from 'next/link'
 import { filterTemplates } from '@/lib/templates'
 import { TemplateCard } from '@/components/ui/TemplateCard'
 import { toggleWish as toggleWishDB } from '@/lib/wishlist'
@@ -17,7 +16,17 @@ const CATEGORY_LABELS: Record<string, string> = {
   blog:      '블로그',
 }
 
-const STACK_OPTIONS = ['Next.js', 'React', 'Vue', 'Tailwind', 'TypeScript', 'Framer Motion']
+// DB 저장값과 일치하는 소문자
+const STACK_OPTIONS = ['nextjs', 'react', 'vue', 'html', 'astro']
+
+// UI 표시용 라벨
+const STACK_LABELS: Record<string, string> = {
+  nextjs: 'Next.js',
+  react:  'React',
+  vue:    'Vue',
+  html:   'HTML',
+  astro:  'Astro',
+}
 
 export function TemplatesClient() {
   const [templates, setTemplates] = useState<Template[]>([])
@@ -37,7 +46,7 @@ export function TemplatesClient() {
       if (!user) return
       setUserId(user.id)
       supabase
-        .from('wishlists')
+        .from('wishlist')           // ← wishlists → wishlist 수정
         .select('template_id')
         .eq('user_id', user.id)
         .then(({ data }) => {
@@ -150,8 +159,8 @@ export function TemplatesClient() {
                 className={`w-10 h-10 rounded-xl border flex items-center justify-center
                             text-sm transition-all cursor-pointer
                   ${gridView === isGrid
-                    ? 'bg-lime/10 border-lime/30 text-lime'
-                    : 'bg-transparent border-white/10 text-sand/40 hover:text-sand'}`}
+                    ? 'border-lime/30 bg-lime/[0.08] text-lime'
+                    : 'border-white/10 text-sand/30 hover:border-white/20'}`}
               >
                 {isGrid ? '⊞' : '☰'}
               </button>
@@ -198,15 +207,11 @@ export function TemplatesClient() {
                       : 'text-sand/50 hover:bg-white/[0.04] hover:text-sand'}`}
                 >
                   <span className="flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full
-                      ${category === value ? 'bg-lime' : 'bg-white/15'}`}
-                    />
+                    <span className={`w-2 h-2 rounded-full ${category === value ? 'bg-lime' : 'bg-white/15'}`} />
                     {label}
                   </span>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded-full
-                    ${category === value
-                      ? 'bg-lime/15 text-lime'
-                      : 'bg-white/[0.05] text-sand/25'}`}>
+                    ${category === value ? 'bg-lime/15 text-lime' : 'bg-white/[0.05] text-sand/25'}`}>
                     {count}
                   </span>
                 </button>
@@ -222,10 +227,7 @@ export function TemplatesClient() {
               <span>{maxPrice === 100 ? '전체' : `₩${(maxPrice * 1000).toLocaleString()}`}</span>
             </div>
             <input
-              type="range"
-              min={0}
-              max={100}
-              value={maxPrice}
+              type="range" min={0} max={100} value={maxPrice}
               onChange={(e) => setMaxPrice(Number(e.target.value))}
               className="w-full accent-lime cursor-pointer"
             />
@@ -236,8 +238,7 @@ export function TemplatesClient() {
             <p className="font-syne font-bold text-[11px] text-sand/30 uppercase tracking-wider mb-3">기술 스택</p>
             <div className="space-y-1.5">
               {STACK_OPTIONS.map((s) => (
-                <label key={s}
-                  className="flex items-center gap-2.5 cursor-pointer group">
+                <label key={s} className="flex items-center gap-2.5 cursor-pointer group">
                   <input
                     type="checkbox"
                     checked={stacks.includes(s)}
@@ -246,17 +247,14 @@ export function TemplatesClient() {
                   />
                   <span className={`w-4 h-4 rounded border flex items-center justify-center
                     flex-shrink-0 transition-all
-                    ${stacks.includes(s)
-                      ? 'bg-lime border-lime'
-                      : 'bg-transparent border-white/15'}`}
-                  >
+                    ${stacks.includes(s) ? 'bg-lime border-lime' : 'bg-transparent border-white/15'}`}>
                     {stacks.includes(s) && (
                       <span className="text-ink text-[10px] font-bold">✓</span>
                     )}
                   </span>
                   <span className={`text-[13px] transition-colors
                     ${stacks.includes(s) ? 'text-sand' : 'text-sand/50 group-hover:text-sand/80'}`}>
-                    {s}
+                    {STACK_LABELS[s] ?? s}  {/* ← 라벨 맵으로 표시 */}
                   </span>
                 </label>
               ))}
@@ -287,10 +285,9 @@ export function TemplatesClient() {
                   key={s}
                   onClick={() => toggleStack(s)}
                   className="flex items-center gap-1 bg-lime/10 border border-lime/20 text-lime
-                             text-[11px] px-2.5 py-1 rounded-full cursor-pointer
-                             hover:bg-lime/20 transition-colors"
+                             text-[11px] px-2.5 py-1 rounded-full cursor-pointer hover:bg-lime/20 transition-colors"
                 >
-                  {s} ✕
+                  {STACK_LABELS[s] ?? s} ✕  {/* ← 라벨 맵으로 표시 */}
                 </span>
               ))}
             </div>
@@ -340,7 +337,6 @@ export function TemplatesClient() {
                   >
                     {wished.has(t.id) ? '♥' : '♡'}
                   </button>
-
                   <TemplateCard template={t} />
                 </div>
               ))}

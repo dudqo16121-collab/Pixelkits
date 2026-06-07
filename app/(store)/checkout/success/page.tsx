@@ -12,19 +12,20 @@ type Status = 'confirming' | 'success' | 'error'
 export default function CheckoutSuccessPage() {
   const params = useSearchParams()
 
-  const paymentKey   = params.get('paymentKey')      ?? ''
-  const orderId      = params.get('orderId')          ?? ''
-  const amount       = Number(params.get('amount')   ?? '0')
-  const templateSlug = params.get('template')         ?? ''
-  const promoCode    = params.get('promoCode')        ?? ''
+  const paymentKey   = params.get('paymentKey')   ?? ''
+  const orderId      = params.get('orderId')       ?? ''
+  const amount       = Number(params.get('amount') ?? '0')
+  const templateSlug = params.get('template')      ?? ''
+  const promoCode    = params.get('promoCode')     ?? ''
 
-  const [status,        setStatus]        = useState<Status>('confirming')
-  const [errorMsg,      setErrorMsg]      = useState('')
-  const [orderNumber,   setOrderNumber]   = useState('')
-  const [downloadToken, setDownloadToken] = useState('')
-  const [tokenExpires,  setTokenExpires]  = useState('')
-  const [template,      setTemplate]      = useState<Template | null>(null)
-  const [downloading,   setDownloading]   = useState<string | null>(null)
+  const [status,      setStatus]      = useState<Status>('confirming')
+  const [errorMsg,    setErrorMsg]    = useState('')
+  const [orderNumber, setOrderNumber] = useState('')
+  const [dbOrderId,   setDbOrderId]   = useState('')   // ← DB의 실제 order.id
+  const [tokenExpires,setTokenExpires]= useState('')
+  const [template,    setTemplate]    = useState<Template | null>(null)
+  const [downloading, setDownloading] = useState<string | null>(null)
+  const [downloadCounts, setDownloadCounts] = useState<Record<string, number>>({})
 
   useEffect(() => {
     if (!paymentKey || !orderId) {
@@ -37,11 +38,13 @@ export default function CheckoutSuccessPage() {
 
   async function confirmPayment() {
     try {
+      const { data: { session } } = await supabase.auth.getSession()
+
       // ── 무료: checkout/page에서 이미 confirm 완료 ────────
       if (paymentKey === 'FREE') {
         const { data: order, error } = await supabase
           .from('orders')
-          .select('order_number, download_token, token_expires_at')
+          .select('id, order_number, token_expires_at')
           .eq('toss_order_id', orderId)
           .single()
 
@@ -51,8 +54,8 @@ export default function CheckoutSuccessPage() {
           return
         }
 
+        setDbOrderId(order.id)
         setOrderNumber(order.order_number)
-        setDownloadToken(order.download_token)
         setTokenExpires(order.token_expires_at)
 
         const { data: tmpl } = await supabase
@@ -64,8 +67,6 @@ export default function CheckoutSuccessPage() {
       }
 
       // ── 유료: Toss → confirm API 호출 ────────────────────
-      const { data: { session } } = await supabase.auth.getSession()
-
       const res = await fetch('/api/payment/confirm', {
         method:  'POST',
         headers: {
@@ -91,8 +92,9 @@ export default function CheckoutSuccessPage() {
         return
       }
 
+      // confirm API가 반환하는 order.id를 저장
+      setDbOrderId(data.orderId ?? '')
       setOrderNumber(data.orderNumber)
-      setDownloadToken(data.downloadToken)
       setTokenExpires(data.tokenExpiresAt)
 
       const { data: tmpl } = await supabase
@@ -115,29 +117,40 @@ export default function CheckoutSuccessPage() {
     return 'card'
   }
 
+  // ── 다운로드 — orderId + 세션 방식 ───────────────────────
   async function handleDownload(fileType: string) {
-    if (!downloadToken) return
+    if (!dbOrderId) return
     setDownloading(fileType)
     try {
-      const res = await fetch(`/api/download?token=${downloadToken}&type=${fileType}`)
-      if (!res.ok) { alert('다운로드에 실패했어요'); return }
-      const blob = await res.blob()
-      const url  = URL.createObjectURL(blob)
-      const a    = document.createElement('a')
-      a.href     = url
-      a.download = fileType === 'source'
-        ? `${template?.slug ?? 'template'}-v1.zip`
-        : fileType === 'guide'
-        ? '설치-가이드-한국어.pdf'
-        : 'license.txt'
-      a.click()
-      URL.revokeObjectURL(url)
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch(`/api/download?orderId=${dbOrderId}&type=${fileType}`, {
+        headers: session?.access_token
+          ? { Authorization: `Bearer ${session.access_token}` }
+          : {},
+      })
+
+      if (res.redirected) {
+        // 카운트 로컬 증가
+        if (fileType === 'source' || fileType === 'all') {
+          setDownloadCounts((prev) => ({
+            ...prev,
+            [fileType]: (prev[fileType] ?? 0) + 1,
+          }))
+        }
+        window.location.href = res.url
+        return
+      }
+
+      if (!res.ok) {
+        const data = await res.json()
+        alert(data.error ?? '다운로드에 실패했어요')
+      }
     } finally {
       setDownloading(null)
     }
   }
 
-  // ── 확인 중 ───────────────────────────────────────────
+  // ── 확인 중 ───────────────────────────────────────────────
   if (status === 'confirming') return (
     <div className="flex flex-col items-center justify-center min-h-[70vh] gap-4">
       <div className="w-8 h-8 border-2 border-lime/30 border-t-lime rounded-full animate-spin" />
@@ -147,7 +160,7 @@ export default function CheckoutSuccessPage() {
     </div>
   )
 
-  // ── 오류 ──────────────────────────────────────────────
+  // ── 오류 ─────────────────────────────────────────────────
   if (status === 'error') return (
     <div className="flex flex-col items-center justify-center min-h-[70vh] gap-4 text-center px-8">
       <div className="text-4xl">⚠</div>
@@ -157,12 +170,12 @@ export default function CheckoutSuccessPage() {
     </div>
   )
 
-  // ── 성공 ──────────────────────────────────────────────
+  // ── 성공 ─────────────────────────────────────────────────
   const isFree = paymentKey === 'FREE'
   const files = [
-    { icon: '🗜', key: 'source',  name: `${template?.slug ?? 'template'}-v1.zip`, size: '소스코드 전체 · 4.8 MB' },
-    { icon: '📄', key: 'guide',   name: '설치-가이드-한국어.pdf',                  size: '설치 가이드 · 1.1 MB'  },
-    { icon: '📋', key: 'license', name: 'license.txt',                              size: '라이선스 문서 · 12 KB'  },
+    { icon: '🗜', key: 'source',  name: `${template?.slug ?? 'template'}-v1.zip`, size: '소스코드 전체' },
+    { icon: '📄', key: 'guide',   name: '설치-가이드-한국어.pdf',                  size: '설치 가이드'   },
+    { icon: '📋', key: 'license', name: 'license.txt',                             size: '라이선스 문서' },
   ]
 
   return (
@@ -214,7 +227,7 @@ export default function CheckoutSuccessPage() {
               </div>
               <button
                 onClick={() => handleDownload(key)}
-                disabled={downloading === key}
+                disabled={downloading === key || !dbOrderId}
                 className="bg-lime text-ink text-[12px] font-bold font-syne px-3 py-1.5 rounded-lg
                            hover:opacity-85 transition-opacity cursor-pointer disabled:opacity-50">
                 {downloading === key ? '...' : '↓ 다운로드'}
@@ -225,8 +238,9 @@ export default function CheckoutSuccessPage() {
 
         <button
           onClick={() => handleDownload('all')}
-          className="btn-lime w-full justify-center py-3.5 rounded-xl">
-          ⬇ 전체 파일 한번에 받기
+          disabled={downloading === 'all' || !dbOrderId}
+          className="btn-lime w-full justify-center py-3.5 rounded-xl disabled:opacity-50">
+          {downloading === 'all' ? '⏳ 준비중...' : '⬇ 전체 파일 한번에 받기'}
         </button>
 
         <p className="text-[12px] text-sand/25 mt-3 flex items-center gap-1.5 flex-wrap">
@@ -246,9 +260,10 @@ export default function CheckoutSuccessPage() {
         {[
           { icon: '⌨', title: '프로젝트 설치하기',  desc: 'npm install → npm run dev로 바로 시작'        },
           { icon: '🚀', title: 'Vercel에 배포하기',  desc: 'GitHub 연결 후 원클릭 배포 — 5분이면 라이브' },
-          { icon: '🎨', title: '커스터마이징 가이드', desc: '색상, 폰트, 텍스트 변경 방법 확인'           },
+          { icon: '📁', title: '다운로드 페이지',    desc: '구매 내역에서 언제든 다시 다운로드 가능'     },
         ].map(({ icon, title, desc }) => (
-          <Link key={title} href="/orders"
+          <Link key={title}
+            href={title === '다운로드 페이지' ? '/downloads' : '/orders'}
             className="card-base rounded-xl p-4 flex items-start gap-3.5
                        hover:border-white/18 transition-colors cursor-pointer block">
             <div className="w-9 h-9 rounded-lg bg-lime/[0.08] flex items-center justify-center
