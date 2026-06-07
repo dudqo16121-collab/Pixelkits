@@ -3,6 +3,11 @@ import { TemplateCard } from '@/components/ui/TemplateCard'
 import { Badge } from '@/components/ui/Badge'
 import { getTemplates } from '@/lib/templates'
 
+export const metadata = {
+  title:       'pixelkits — 프론트엔드 템플릿 스토어',
+  description: '개발자가 만든 프리미엄 Next.js 템플릿. 바로 쓸 수 있는 코드로 납품 속도를 3배 높이세요.',
+}
+
 export default async function HomePage() {
   const templates = await getTemplates()
   const featured  = templates[0]

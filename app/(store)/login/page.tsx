@@ -52,9 +52,10 @@ export default function LoginPage() {
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-[12px] text-sand/45">비밀번호</label>
-                <span className="text-[12px] text-lime/70 hover:text-lime transition-colors cursor-pointer">
-                  비밀번호 찾기
-                </span>
+<Link href="/forgot-password"
+  className="text-[12px] text-lime/70 hover:text-lime transition-colors">
+  비밀번호 찾기
+</Link>
               </div>
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
                 placeholder="비밀번호 입력"

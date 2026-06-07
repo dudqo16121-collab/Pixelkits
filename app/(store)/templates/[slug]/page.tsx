@@ -1,9 +1,44 @@
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
+import type { Metadata } from 'next'
 import { getTemplateBySlug } from '@/lib/templates'
 import { Badge } from '@/components/ui/Badge'
 import { formatPrice, discountPercent } from '@/lib/utils'
 import { ReviewSection } from '@/components/sections/ReviewSection'
+
+// 기존 Props 인터페이스 활용
+export async function generateMetadata(
+  { params }: { params: { slug: string } }
+): Promise<Metadata> {
+  const template = await getTemplateBySlug(params.slug)
+  if (!template) return { title: '템플릿을 찾을 수 없어요' }
+
+  const title       = template.name
+  const description = template.description ?? `${template.name} — pixelkits 프론트엔드 템플릿`
+  const imageUrl    = template.thumbnail_url ?? '/og-default.png'
+
+  return {
+    title,
+    description,
+    openGraph: {
+      title:       `${title} — pixelkits`,
+      description,
+      url:         `https://pixelkits.co/templates/${params.slug}`,
+      images: [{
+        url:    imageUrl,
+        width:  1200,
+        height: 630,
+        alt:    title,
+      }],
+    },
+    twitter: {
+      card:        'summary_large_image',
+      title:       `${title} — pixelkits`,
+      description,
+      images:      [imageUrl],
+    },
+  }
+}
 
 interface Props {
   params: { slug: string }

@@ -29,7 +29,16 @@ export function Footer() {
             <Link href="/orders" className="text-sand/50 hover:text-sand transition-colors">구매 내역</Link>
           </div>
         </div>
+<div className="flex flex-col gap-3">
+  <span className="font-syne font-bold text-[11px] text-sand/30 uppercase tracking-widest">
+    법적 고지
+  </span>
+  <Link href="/terms"   className="text-sand/50 hover:text-sand transition-colors">이용약관</Link>
+  <Link href="/privacy" className="text-sand/50 hover:text-sand transition-colors">개인정보처리방침</Link>
+  <Link href="/refund"  className="text-sand/50 hover:text-sand transition-colors">환불 정책</Link>
+</div>
       </div>
+
 
       <div className="max-w-5xl mx-auto mt-10 pt-6 border-t border-white/[0.06] flex items-center justify-between text-[12px] text-sand/25">
         <span>© 2026 pixelkits. All rights reserved.</span>

@@ -10,7 +10,6 @@ import type { Template } from '@/types'
 
 type PayMethod = 'card' | 'tosspay' | 'kakaopay'
 
-// 토스페이먼츠 loadTossPayments 타입 선언
 declare global {
   interface Window {
     TossPayments: (clientKey: string) => {
@@ -24,23 +23,23 @@ export default function CheckoutPage() {
   const router = useRouter()
   const slug   = params.get('template') ?? ''
 
-  const [template,  setTemplate]  = useState<Template | null>(null)
-  const [loading,   setLoading]   = useState(true)
-  const [email,     setEmail]     = useState('')
-  const [method,    setMethod]    = useState<PayMethod>('card')
-  const [promo,     setPromo]     = useState('')
-  const [discount,  setDiscount]  = useState(0)
-  const [agreed,    setAgreed]    = useState(true)
-  const [paying,    setPaying]    = useState(false)
-  const [promoMsg,  setPromoMsg]  = useState('')
-  const [sdkReady,  setSdkReady]  = useState(false)
+  const [template, setTemplate] = useState<Template | null>(null)
+  const [loading,  setLoading]  = useState(true)
+  const [email,    setEmail]    = useState('')
+  const [method,   setMethod]   = useState<PayMethod>('card')
+  const [promo,    setPromo]    = useState('')
+  const [discount, setDiscount] = useState(0)
+  const [agreed,   setAgreed]   = useState(true)
+  const [paying,   setPaying]   = useState(false)
+  const [promoMsg, setPromoMsg] = useState('')
+  const [sdkReady, setSdkReady] = useState(false)
 
-  // 토스페이먼츠 SDK 스크립트 로드
+  // 토스 SDK 로드 (유료일 때만 실제로 필요하지만 미리 로드)
   useEffect(() => {
     if (document.getElementById('toss-sdk')) { setSdkReady(true); return }
     const script = document.createElement('script')
-    script.id  = 'toss-sdk'
-    script.src = 'https://js.tosspayments.com/v1/payment'
+    script.id    = 'toss-sdk'
+    script.src   = 'https://js.tosspayments.com/v1/payment'
     script.onload = () => setSdkReady(true)
     document.head.appendChild(script)
   }, [])
@@ -78,11 +77,12 @@ export default function CheckoutPage() {
   const basePrice   = template.price ?? 0
   const origPrice   = template.original_price ?? basePrice
   const finalPrice  = Math.max(0, basePrice - discount)
+  const isFree      = finalPrice === 0
   const discountPct = origPrice > 0
     ? Math.round((1 - basePrice / origPrice) * 100)
     : 0
 
-  // 프로모 코드 검증 (서버 API로)
+  // 프로모 코드 검증
   async function applyPromo() {
     if (!promo.trim()) return
     const res  = await fetch('/api/promo/validate', {
@@ -102,15 +102,59 @@ export default function CheckoutPage() {
 
   // 결제 실행
   async function handlePay() {
-    if (!email || !agreed || !sdkReady) return
+    if (!email || !agreed) return
     setPaying(true)
 
+    const currentTemplate = template
+    if (!currentTemplate) {
+      setPaying(false)
+      return
+    }
+
     try {
+      // ── 무료: Toss 없이 바로 서버 confirm ───────────────
+      if (isFree) {
+        const { data: { session } } = await supabase.auth.getSession()
+        const fakeOrderId = `FREE-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+
+        const res = await fetch('/api/payment/confirm', {
+          method:  'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+          },
+          body: JSON.stringify({
+            paymentKey:    'FREE',
+            orderId:       fakeOrderId,
+            amount:        0,
+            templateSlug:  slug,
+            email,
+            paymentMethod: 'free',
+            promoCode:     promo || undefined,
+          }),
+        })
+
+        const data = await res.json()
+        if (!res.ok || !data.success) {
+          alert(data.error ?? '오류가 발생했어요')
+          setPaying(false)
+          return
+        }
+
+        router.push(
+          `/checkout/success?orderId=${fakeOrderId}&amount=0` +
+          `&template=${slug}&paymentKey=FREE` +
+          `&customerEmail=${encodeURIComponent(email)}`
+        )
+        return
+      }
+
+      // ── 유료: Toss 결제 ──────────────────────────────────
+      if (!sdkReady) return
+
       const tossClientKey = process.env.NEXT_PUBLIC_TOSS_CLIENT_KEY!
       const tossPayments  = window.TossPayments(tossClientKey)
-
-      // 주문 ID: 토스가 요구하는 고유 값 (6~64자, 영문·숫자·-_)
-      const tossOrderId = `PKT-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+      const tossOrderId   = `PKT-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 
       const methodMap: Record<PayMethod, string> = {
         card:     '카드',
@@ -119,17 +163,14 @@ export default function CheckoutPage() {
       }
 
       await tossPayments.requestPayment(methodMap[method], {
-        amount:      finalPrice,
-        orderId:     tossOrderId,
-        orderName: `${template?.name ?? 'pixelkits 템플릿'} — pixelkits`,
+        amount:        finalPrice,
+        orderId:       tossOrderId,
+        orderName:     `${template.name} — pixelkits`,
         customerEmail: email,
-        // 성공/실패 시 리다이렉트 URL
-        successUrl: `${window.location.origin}/checkout/success?template=${slug}&orderId=${tossOrderId}&promoCode=${promo}`,
-        failUrl:    `${window.location.origin}/checkout?template=${slug}&error=payment_failed`,
+        successUrl:    `${window.location.origin}/checkout/success?template=${slug}&orderId=${tossOrderId}&promoCode=${promo}&paymentMethod=${method}&customerEmail=${encodeURIComponent(email)}`,
+        failUrl:       `${window.location.origin}/checkout?template=${slug}&error=payment_failed`,
       })
-      // requestPayment 는 성공 시 successUrl 로 리다이렉트하므로 아래 코드는 실행되지 않음
     } catch (err: unknown) {
-      // 유저가 결제 창을 닫은 경우 등
       if (err instanceof Error && err.message !== 'User Cancel') {
         console.error('[결제 오류]', err)
       }
@@ -139,8 +180,8 @@ export default function CheckoutPage() {
 
   const METHODS: { id: PayMethod; label: string; sub: string }[] = [
     { id: 'card',     label: '신용 · 체크카드', sub: '국내외 모든 카드' },
-    { id: 'tosspay',  label: '토스페이',        sub: '간편결제' },
-    { id: 'kakaopay', label: '카카오페이',       sub: '간편결제' },
+    { id: 'tosspay',  label: '토스페이',        sub: '간편결제'       },
+    { id: 'kakaopay', label: '카카오페이',       sub: '간편결제'       },
   ]
 
   return (
@@ -172,7 +213,7 @@ export default function CheckoutPage() {
         <h2 className="font-syne font-bold text-[17px] mb-4">이메일 주소</h2>
         <div className="mb-2">
           <label className="text-[12px] text-sand/45 mb-1.5 block">
-            결제 완료 후 다운로드 링크를 보내드려요
+            {isFree ? '다운로드 링크를 보내드려요' : '결제 완료 후 다운로드 링크를 보내드려요'}
           </label>
           <input
             type="email"
@@ -187,29 +228,32 @@ export default function CheckoutPage() {
 
         <div className="h-px bg-white/[0.07] mb-7" />
 
-        {/* 결제 수단 */}
-        <h2 className="font-syne font-bold text-[17px] mb-4">결제 수단</h2>
-        <div className="flex gap-2.5 mb-7">
-          {METHODS.map(({ id, label, sub }) => (
-            <button
-              key={id}
-              onClick={() => setMethod(id)}
-              className={`flex-1 card-base rounded-xl p-3.5 flex items-center gap-2.5 transition-all cursor-pointer
-                ${method === id ? 'border-lime/40 bg-lime/[0.05]' : 'hover:border-white/20'}`}
-            >
-              <div>
-                <p className="text-[13px] font-medium text-left">{label}</p>
-                <p className="text-[11px] text-sand/35 text-left">{sub}</p>
-              </div>
-              <div className={`w-4 h-4 rounded-full border ml-auto flex-shrink-0 flex items-center justify-center
-                ${method === id ? 'border-lime bg-lime' : 'border-white/20'}`}>
-                {method === id && <div className="w-2 h-2 rounded-full bg-ink" />}
-              </div>
-            </button>
-          ))}
-        </div>
-
-        <div className="h-px bg-white/[0.07] mb-7" />
+        {/* 결제 수단 — 무료일 때 숨김 */}
+        {!isFree && (
+          <>
+            <h2 className="font-syne font-bold text-[17px] mb-4">결제 수단</h2>
+            <div className="flex gap-2.5 mb-7">
+              {METHODS.map(({ id, label, sub }) => (
+                <button
+                  key={id}
+                  onClick={() => setMethod(id)}
+                  className={`flex-1 card-base rounded-xl p-3.5 flex items-center gap-2.5 transition-all cursor-pointer
+                    ${method === id ? 'border-lime/40 bg-lime/[0.05]' : 'hover:border-white/20'}`}
+                >
+                  <div>
+                    <p className="text-[13px] font-medium text-left">{label}</p>
+                    <p className="text-[11px] text-sand/35 text-left">{sub}</p>
+                  </div>
+                  <div className={`w-4 h-4 rounded-full border ml-auto flex-shrink-0 flex items-center justify-center
+                    ${method === id ? 'border-lime bg-lime' : 'border-white/20'}`}>
+                    {method === id && <div className="w-2 h-2 rounded-full bg-ink" />}
+                  </div>
+                </button>
+              ))}
+            </div>
+            <div className="h-px bg-white/[0.07] mb-7" />
+          </>
+        )}
 
         {/* 약관 동의 */}
         <label className="flex items-start gap-3 cursor-pointer mb-8">
@@ -228,6 +272,7 @@ export default function CheckoutPage() {
 
       {/* ── 오른쪽: 주문 요약 ── */}
       <div className="p-8 bg-white/[0.02]">
+
         {/* 상품 정보 */}
         <div className="card-base rounded-2xl p-4 flex gap-3 mb-6">
           <div className="w-16 h-12 rounded-xl bg-gradient-to-br from-[#0d1b2a] to-[#1e3a5f] border border-white/10 flex-shrink-0" />
@@ -249,7 +294,8 @@ export default function CheckoutPage() {
               onKeyDown={(e) => e.key === 'Enter' && applyPromo()}
               placeholder="코드 입력"
               className="flex-1 bg-panel border border-white/10 rounded-xl px-3 py-2.5 text-[13px]
-                         text-sand placeholder:text-sand/20 outline-none focus:border-lime/40 transition-colors uppercase"
+                         text-sand placeholder:text-sand/20 outline-none focus:border-lime/40
+                         transition-colors uppercase"
             />
             <button
               onClick={applyPromo}
@@ -284,10 +330,12 @@ export default function CheckoutPage() {
               <span className="text-teal">-{formatPrice(discount)}</span>
             </div>
           )}
-          <div className="flex justify-between text-[13px]">
-            <span className="text-sand/40">부가세 (10%)</span>
-            <span className="text-sand">포함</span>
-          </div>
+          {!isFree && (
+            <div className="flex justify-between text-[13px]">
+              <span className="text-sand/40">부가세 (10%)</span>
+              <span className="text-sand">포함</span>
+            </div>
+          )}
           <div className="h-px bg-white/[0.07] my-1" />
           <div className="flex justify-between">
             <span className="font-syne font-bold text-[15px]">최종 결제</span>
@@ -300,22 +348,36 @@ export default function CheckoutPage() {
         {/* 결제 버튼 */}
         <button
           onClick={handlePay}
-          disabled={!email || !agreed || paying || !sdkReady}
+          disabled={!email || !agreed || paying || (!isFree && !sdkReady)}
           className="btn-lime w-full justify-center text-[15px] py-4 rounded-2xl mb-3
                      disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {paying ? '처리 중...' : `🔒 ${formatPrice(finalPrice)} 결제하기`}
+          {paying
+            ? '처리 중...'
+            : isFree
+            ? '⬇ 무료로 다운로드'
+            : `🔒 ${formatPrice(finalPrice)} 결제하기`}
         </button>
 
         <div className="flex justify-center gap-4 text-[11px] text-sand/25 mb-5">
-          <span>🛡 안전결제</span>
-          <span>↻ 7일 환불</span>
-          <span>⬇ 즉시 다운로드</span>
+          {isFree ? (
+            <span>⬇ 즉시 다운로드</span>
+          ) : (
+            <>
+              <span>🛡 안전결제</span>
+              <span>↻ 7일 환불</span>
+              <span>⬇ 즉시 다운로드</span>
+            </>
+          )}
         </div>
 
-        <div className="bg-teal/[0.07] border border-teal/15 rounded-xl p-3 text-[12px] text-teal/85 leading-relaxed">
-          결제 후 <strong className="text-teal">즉시</strong> 다운로드 링크가 이메일로 발송됩니다.
-          7일 이내 미사용 시 전액 환불 가능.
+        <div className={`border rounded-xl p-3 text-[12px] leading-relaxed
+          ${isFree
+            ? 'bg-lime/[0.05] border-lime/15 text-lime/80'
+            : 'bg-teal/[0.07] border-teal/15 text-teal/85'}`}>
+          {isFree
+            ? '이메일을 입력하면 즉시 다운로드 링크를 보내드려요.'
+            : <>결제 후 <strong className="text-teal">즉시</strong> 다운로드 링크가 이메일로 발송됩니다. 7일 이내 미사용 시 전액 환불 가능.</>}
         </div>
       </div>
     </div>

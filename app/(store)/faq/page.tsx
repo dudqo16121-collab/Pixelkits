@@ -1,6 +1,11 @@
 'use client'
 import { useState } from 'react'
 
+export const metadata = {
+  title:       'FAQ',
+  description: 'pixelkits 자주 묻는 질문. 라이선스, 환불, 다운로드, 커스터마이징 관련 안내.',
+}
+
 const FAQS = [
   { cat: 'purchase', q: '어떤 결제 수단을 지원하나요?',        a: '신용·체크카드, 토스페이, 카카오페이를 지원합니다.' },
   { cat: 'purchase', q: '환불 정책은 어떻게 되나요?',          a: '7일 환불 보장. 파일을 다운로드한 경우 제한될 수 있으니 문의해주세요.' },

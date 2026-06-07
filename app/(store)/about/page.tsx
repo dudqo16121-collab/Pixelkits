@@ -1,5 +1,10 @@
 import Link from 'next/link'
 
+export const metadata = {
+  title:       '소개',
+  description: 'pixelkits를 만든 이유와 철학. 한국 개발자를 위한 프론트엔드 템플릿 스토어.',
+}
+
 export default function AboutPage() {
   return (
     <div>

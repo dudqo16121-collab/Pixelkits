@@ -17,19 +17,20 @@ export default function SettingsPage() {
   const router   = useRouter()
   const { refreshUser } = useUser()
 
-  const [userId,   setUserId]   = useState<string | null>(null)
-  const [name,     setName]     = useState('')
-  const [email,    setEmail]    = useState('')
-  const [loading,  setLoading]  = useState(true)
-  const [saving,   setSaving]   = useState(false)
-  const [saved,    setSaved]    = useState(false)
-  const [pwForm,   setPwForm]   = useState({ current: '', next: '', confirm: '' })
-  const [pwMsg,    setPwMsg]    = useState('')
-  const [notify,   setNotify]   = useState({
+  const [userId,      setUserId]      = useState<string | null>(null)
+  const [name,        setName]        = useState('')
+  const [email,       setEmail]       = useState('')
+  const [avatarUrl,   setAvatarUrl]   = useState('')
+  const [loading,     setLoading]     = useState(true)
+  const [saving,      setSaving]      = useState(false)
+  const [saved,       setSaved]       = useState(false)
+  const [uploadingImg, setUploadingImg] = useState(false)
+  const [pwForm,      setPwForm]      = useState({ current: '', next: '', confirm: '' })
+  const [pwMsg,       setPwMsg]       = useState('')
+  const [notify,      setNotify]      = useState({
     new_template: true, order: true, newsletter: false,
   })
 
-  // 현재 유저 정보 불러오기
   useEffect(() => {
     async function loadUser() {
       const { data: { user } } = await supabase.auth.getUser()
@@ -38,16 +39,17 @@ export default function SettingsPage() {
       setUserId(user.id)
       setEmail(user.email ?? '')
 
-      // profiles 테이블에서 추가 정보 조회
       const { data: profile } = await supabase
         .from('profiles')
-        .select('name')
+        .select('name, avatar_url')
         .eq('id', user.id)
         .single()
 
-      if (profile) setName(profile.name ?? '')
+      if (profile) {
+        setName(profile.name ?? '')
+        setAvatarUrl(profile.avatar_url ?? '')
+      }
 
-      // 알림 설정 조회
       const { data: notifData } = await supabase
         .from('notification_settings')
         .select('*')
@@ -67,25 +69,50 @@ export default function SettingsPage() {
     loadUser()
   }, [router])
 
-  // 프로필 저장
+  async function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file || !userId) return
+    if (file.size > 2 * 1024 * 1024) { alert('2MB 이하 이미지만 업로드 가능해요'); return }
+
+    setUploadingImg(true)
+    const ext  = file.name.split('.').pop()
+    const path = `avatars/${userId}.${ext}`
+
+    const { error: upErr } = await supabase.storage
+      .from('avatars')
+      .upload(path, file, { upsert: true })
+
+    if (upErr) { alert('업로드에 실패했어요: ' + upErr.message); setUploadingImg(false); return }
+
+    const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(path)
+
+    await supabase.from('profiles').upsert({ id: userId, avatar_url: publicUrl })
+    setAvatarUrl(publicUrl)
+    await refreshUser()
+    setUploadingImg(false)
+  }
+
+  async function handleAvatarDelete() {
+    if (!userId) return
+    const exts = ['jpg', 'jpeg', 'png', 'webp', 'gif']
+    await supabase.storage.from('avatars').remove(exts.map((e) => `avatars/${userId}.${e}`))
+    await supabase.from('profiles').upsert({ id: userId, avatar_url: null })
+    setAvatarUrl('')
+    await refreshUser()
+  }
+
   async function saveProfile() {
     if (!userId) return
     setSaving(true)
 
-    // profiles 테이블 업데이트
-    await supabase
-      .from('profiles')
-      .upsert({ id: userId, name })
+    await supabase.from('profiles').upsert({ id: userId, name })
 
-    // 알림 설정 저장
-    await supabase
-      .from('notification_settings')
-      .upsert({
-        user_id:      userId,
-        new_template: notify.new_template,
-        order_update: notify.order,
-        newsletter:   notify.newsletter,
-      })
+    await supabase.from('notification_settings').upsert({
+      user_id:      userId,
+      new_template: notify.new_template,
+      order_update: notify.order,
+      newsletter:   notify.newsletter,
+    })
 
     setSaving(false)
     setSaved(true)
@@ -93,20 +120,10 @@ export default function SettingsPage() {
     setTimeout(() => setSaved(false), 2500)
   }
 
-  // 비밀번호 변경
   async function changePassword() {
-    if (!pwForm.next || !pwForm.confirm) {
-      setPwMsg('새 비밀번호를 입력해주세요')
-      return
-    }
-    if (pwForm.next !== pwForm.confirm) {
-      setPwMsg('새 비밀번호가 일치하지 않아요')
-      return
-    }
-    if (pwForm.next.length < 8) {
-      setPwMsg('비밀번호는 8자 이상이어야 해요')
-      return
-    }
+    if (!pwForm.next || !pwForm.confirm) { setPwMsg('새 비밀번호를 입력해주세요'); return }
+    if (pwForm.next !== pwForm.confirm)  { setPwMsg('새 비밀번호가 일치하지 않아요'); return }
+    if (pwForm.next.length < 8)          { setPwMsg('비밀번호는 8자 이상이어야 해요'); return }
 
     const { error } = await supabase.auth.updateUser({ password: pwForm.next })
     if (error) {
@@ -118,40 +135,39 @@ export default function SettingsPage() {
     setTimeout(() => setPwMsg(''), 3000)
   }
 
-  // 계정 삭제
-async function deleteAccount() {
-  if (!confirm('정말 계정을 삭제할까요? 구매 내역과 다운로드 권한도 모두 사라져요.')) return
-
-  const { data: { session } } = await supabase.auth.getSession()
-  const res = await fetch('/api/user/delete', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${session?.access_token}` },
-  })
-  const data = await res.json()
-
-  if (!res.ok) { alert(data.error); return }
-
-  await supabase.auth.signOut()
-  router.push('/')
-}
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh] text-sand/30">
-        <div className="w-6 h-6 border-2 border-lime/30 border-t-lime rounded-full animate-spin mr-3" />
-        불러오는 중...
-      </div>
-    )
+  async function deleteAccount() {
+    if (!confirm('정말 계정을 삭제할까요? 구매 내역과 다운로드 권한도 모두 사라져요.')) return
+    const { data: { session } } = await supabase.auth.getSession()
+    const res = await fetch('/api/user/delete', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    })
+    const data = await res.json()
+    if (!res.ok) { alert(data.error); return }
+    await supabase.auth.signOut()
+    router.push('/')
   }
+
+  const initial = name?.[0] ?? email?.[0] ?? '?'
+
+  if (loading) return (
+    <div className="flex items-center justify-center min-h-[60vh] text-sand/30">
+      <div className="w-6 h-6 border-2 border-lime/30 border-t-lime rounded-full animate-spin mr-3" />
+      불러오는 중...
+    </div>
+  )
 
   return (
     <div className="grid md:grid-cols-[220px_1fr] min-h-[calc(100vh-57px)]">
-      {/* 사이드바 */}
+
+      {/* ── 사이드바 ── */}
       <aside className="p-6 border-r border-white/[0.07]">
         <div className="card-base rounded-xl p-4 flex items-center gap-3 mb-6">
           <div className="w-10 h-10 rounded-full bg-lime/12 border border-lime/25
-                          flex items-center justify-center font-syne font-bold text-lime">
-            {name?.[0] ?? email?.[0] ?? '?'}
+                          flex items-center justify-center font-syne font-bold text-lime overflow-hidden flex-shrink-0">
+            {avatarUrl
+              ? <img src={avatarUrl} alt="프로필" className="w-full h-full object-cover" />
+              : initial}
           </div>
           <div>
             <p className="text-[13px] font-medium truncate">{name || '이름 없음'}</p>
@@ -171,40 +187,62 @@ async function deleteAccount() {
         </div>
       </aside>
 
-      {/* 콘텐츠 */}
+      {/* ── 콘텐츠 ── */}
       <div className="p-8 max-w-2xl">
         <h1 className="font-syne font-extrabold text-2xl tracking-tight mb-8">계정 설정</h1>
 
         {/* 프로필 */}
         <section className="card-base rounded-2xl p-6 mb-5">
           <h2 className="font-syne font-bold text-[15px] mb-5">프로필</h2>
+
+          {/* 아바타 */}
           <div className="flex items-center gap-4 mb-6">
             <div className="w-16 h-16 rounded-full bg-lime/12 border border-lime/25
-                            flex items-center justify-center font-syne font-extrabold text-lime text-xl">
-              {name?.[0] ?? email?.[0] ?? '?'}
+                            flex items-center justify-center font-syne font-extrabold text-lime text-xl
+                            overflow-hidden flex-shrink-0">
+              {avatarUrl
+                ? <img src={avatarUrl} alt="프로필" className="w-full h-full object-cover" />
+                : initial}
             </div>
             <div>
-              <p className="text-[13px] text-sand/50 mb-1">프로필 이미지</p>
-              <button className="text-[12px] text-lime border border-lime/25 bg-lime/[0.08]
-                                 rounded-lg px-3 py-1.5 hover:bg-lime/15 transition-colors cursor-pointer">
-                이미지 변경
-              </button>
+              <p className="text-[13px] text-sand/50 mb-1.5">프로필 이미지 (JPG·PNG, 2MB 이하)</p>
+              <div className="flex items-center gap-2">
+                <label className={`text-[12px] text-lime border border-lime/25 bg-lime/[0.08]
+                                   rounded-lg px-3 py-1.5 hover:bg-lime/15 transition-colors cursor-pointer
+                                   ${uploadingImg ? 'opacity-50 pointer-events-none' : ''}`}>
+                  {uploadingImg ? '업로드 중...' : '이미지 변경'}
+                  <input type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
+                </label>
+                {avatarUrl && (
+                  <button
+                    onClick={handleAvatarDelete}
+                    className="text-[12px] text-sand/30 hover:text-[#ff5f3f] transition-colors cursor-pointer">
+                    삭제
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
+          {/* 이름 / 이메일 */}
           <div className="space-y-4">
             <div>
               <label className="text-[12px] text-sand/45 mb-1.5 block">이름</label>
-              <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+              <input
+                type="text" value={name}
+                onChange={(e) => setName(e.target.value)}
                 placeholder="이름 입력"
                 className="w-full bg-[#0d0d0d] border border-white/10 rounded-xl px-4 py-3
-                           text-[14px] text-sand outline-none focus:border-lime/40 transition-colors" />
+                           text-[14px] text-sand outline-none focus:border-lime/40 transition-colors"
+              />
             </div>
             <div>
               <label className="text-[12px] text-sand/45 mb-1.5 block">이메일</label>
-              <input type="email" value={email} disabled
+              <input
+                type="email" value={email} disabled
                 className="w-full bg-[#0d0d0d] border border-white/[0.06] rounded-xl px-4 py-3
-                           text-[14px] text-sand/40 cursor-not-allowed" />
+                           text-[14px] text-sand/40 cursor-not-allowed"
+              />
               <p className="text-[11px] text-sand/25 mt-1.5">이메일은 변경할 수 없어요</p>
             </div>
           </div>
@@ -228,12 +266,14 @@ async function deleteAccount() {
             ].map(({ label, key, placeholder }) => (
               <div key={key}>
                 <label className="text-[12px] text-sand/45 mb-1.5 block">{label}</label>
-                <input type="password" placeholder={placeholder}
+                <input
+                  type="password" placeholder={placeholder}
                   value={pwForm[key as keyof typeof pwForm]}
                   onChange={(e) => setPwForm({ ...pwForm, [key]: e.target.value })}
                   className="w-full bg-[#0d0d0d] border border-white/10 rounded-xl px-4 py-3
                              text-[14px] text-sand placeholder:text-sand/20
-                             outline-none focus:border-lime/40 transition-colors" />
+                             outline-none focus:border-lime/40 transition-colors"
+                />
               </div>
             ))}
           </div>

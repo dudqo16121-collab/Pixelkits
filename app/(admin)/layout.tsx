@@ -24,11 +24,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     )
   }
 
-  const MENU = [
-    { href: '/admin',           icon: '▦', label: '대시보드'    },
-    { href: '/admin/templates', icon: '⊞', label: '템플릿 관리' },
-    { href: '/admin/orders',    icon: '🧾', label: '주문 조회'   },
-  ]
+const MENU = [
+  { href: '/admin',           icon: '▦',  label: '대시보드'      },
+  { href: '/admin/templates', icon: '⊞',  label: '템플릿 관리'   },
+  { href: '/admin/orders',    icon: '🧾', label: '주문 조회'     },
+  { href: '/admin/promos',    icon: '🎟', label: '프로모 코드'   },
+]
 
   return (
     <div className="min-h-screen bg-[#080808] text-sand font-dm flex">

@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-
-// 토스페이먼츠 결제 승인 + orders 저장
-// POST /api/payment/confirm
-// body: { paymentKey, orderId, amount, templateSlug, email, paymentMethod, promoCode? }
+import { sendPurchaseEmail } from '@/lib/email'
 
 export async function POST(req: NextRequest) {
   try {
     const {
       paymentKey,
-      orderId,      // 토스페이먼츠 orderId (uuid 형태로 생성해서 넘기세요)
+      orderId,
       amount,
       templateSlug,
       email,
@@ -18,37 +15,40 @@ export async function POST(req: NextRequest) {
     } = await req.json()
 
     // ── 1. 필수값 검증 ────────────────────────────────────
-    if (!paymentKey || !orderId || !amount || !templateSlug || !email) {
+    if (!paymentKey || !orderId || !templateSlug || !email) {
       return NextResponse.json({ error: '필수 파라미터가 누락됐어요' }, { status: 400 })
     }
 
-    // ── 2. 토스페이먼츠 결제 승인 API 호출 ───────────────
-    const tossSecretKey = process.env.TOSS_SECRET_KEY!
-    const basicToken = Buffer.from(`${tossSecretKey}:`).toString('base64')
+    const isFree = paymentKey === 'FREE'
 
-    const tossRes = await fetch('https://api.tosspayments.com/v1/payments/confirm', {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${basicToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ paymentKey, orderId, amount }),
-    })
+    // ── 2. Toss 결제 승인 (유료일 때만) ──────────────────
+    if (!isFree) {
+      const tossSecretKey = process.env.TOSS_SECRET_KEY!
+      const basicToken    = Buffer.from(`${tossSecretKey}:`).toString('base64')
 
-    const tossData = await tossRes.json()
+      const tossRes = await fetch('https://api.tosspayments.com/v1/payments/confirm', {
+        method: 'POST',
+        headers: {
+          Authorization:  `Basic ${basicToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ paymentKey, orderId, amount }),
+      })
 
-    if (!tossRes.ok) {
-      console.error('[Toss] 결제 승인 실패:', tossData)
-      return NextResponse.json(
-        { error: tossData.message ?? '결제 승인에 실패했어요' },
-        { status: 400 }
-      )
+      const tossData = await tossRes.json()
+      if (!tossRes.ok) {
+        console.error('[Toss] 결제 승인 실패:', tossData)
+        return NextResponse.json(
+          { error: tossData.message ?? '결제 승인에 실패했어요' },
+          { status: 400 }
+        )
+      }
     }
 
     // ── 3. 템플릿 조회 ────────────────────────────────────
     const { data: template, error: tmplErr } = await supabaseAdmin
       .from('templates')
-      .select('id, price, original_price, is_published')
+      .select('id, name, price, original_price, is_published, download_count')
       .eq('slug', templateSlug)
       .single()
 
@@ -72,11 +72,9 @@ export async function POST(req: NextRequest) {
       if (
         promo &&
         (!promo.expires_at || new Date(promo.expires_at) > new Date()) &&
-        (!promo.max_uses || promo.used_count < promo.max_uses)
+        (!promo.max_uses    || promo.used_count < promo.max_uses)
       ) {
         discountAmount = Math.round(template.price * (promo.discount_percent / 100))
-
-        // 사용 횟수 증가
         await supabaseAdmin
           .from('promo_codes')
           .update({ used_count: promo.used_count + 1 })
@@ -87,12 +85,18 @@ export async function POST(req: NextRequest) {
     const expectedAmount = Math.max(0, template.price - discountAmount)
 
     // ── 5. 금액 무결성 검증 ───────────────────────────────
-    if (amount !== expectedAmount) {
-      console.error('[Security] 금액 불일치:', { amount, expectedAmount })
-      return NextResponse.json({ error: '결제 금액이 일치하지 않아요' }, { status: 400 })
+    if (isFree) {
+      if (expectedAmount !== 0) {
+        return NextResponse.json({ error: '유료 템플릿은 무료로 받을 수 없어요' }, { status: 400 })
+      }
+    } else {
+      if (amount !== expectedAmount) {
+        console.error('[Security] 금액 불일치:', { amount, expectedAmount })
+        return NextResponse.json({ error: '결제 금액이 일치하지 않아요' }, { status: 400 })
+      }
     }
 
-    // ── 6. 로그인 유저 확인 (선택적) ─────────────────────
+    // ── 6. 로그인 유저 확인 ───────────────────────────────
     const authHeader = req.headers.get('Authorization')
     let userId: string | null = null
     if (authHeader?.startsWith('Bearer ')) {
@@ -112,8 +116,8 @@ export async function POST(req: NextRequest) {
         original_amount: template.original_price ?? template.price,
         discount_amount: discountAmount,
         promo_code:      promoCode ?? null,
-        payment_method:  paymentMethod,
-        payment_key:     paymentKey,
+        payment_method:  isFree ? 'free' : paymentMethod,
+        payment_key:     isFree ? null   : paymentKey,
         toss_order_id:   orderId,
         status:          'completed',
       })
@@ -128,8 +132,18 @@ export async function POST(req: NextRequest) {
     // ── 8. 다운로드 횟수 증가 ─────────────────────────────
     await supabaseAdmin
       .from('templates')
-      .update({ download_count: template.download_count })  // DB trigger로 처리 가능
+      .update({ download_count: (template.download_count ?? 0) + 1 })
       .eq('id', template.id)
+
+    // ── 9. 구매 완료 이메일 발송 ──────────────────────────
+    sendPurchaseEmail({
+      to:             email,
+      orderNumber:    order.order_number,
+      templateName:   template.name,
+      amount:         expectedAmount,
+      downloadToken:  order.download_token,
+      tokenExpiresAt: order.token_expires_at,
+    }).catch((err) => console.error('[Email] 발송 오류:', err))
 
     return NextResponse.json({
       success:        true,
@@ -137,6 +151,7 @@ export async function POST(req: NextRequest) {
       downloadToken:  order.download_token,
       tokenExpiresAt: order.token_expires_at,
     })
+
   } catch (err) {
     console.error('[API] /payment/confirm 오류:', err)
     return NextResponse.json({ error: '서버 오류가 발생했어요' }, { status: 500 })
