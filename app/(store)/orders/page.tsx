@@ -1,10 +1,10 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 import { formatPrice, formatDate } from '@/lib/utils'
-import { supabase } from '@/lib/supabase'
 import { useUser } from '@/lib/UserContext'
+import { useOrders } from '@/lib/useOrders'
 
 const SIDEBAR = [
   { label: '구매 내역',   href: '/orders'    },
@@ -12,80 +12,19 @@ const SIDEBAR = [
   { label: '찜한 템플릿', href: '/wishlist'  },
   { label: '계정 설정',   href: '/settings'  },
 ]
-
 const METHOD_LABEL: Record<string, string> = {
-  card:     '신용카드',
-  tosspay:  '토스페이',
-  kakaopay: '카카오페이',
+  card: '신용카드', tosspay: '토스페이', kakaopay: '카카오페이', free: '무료',
 }
 
 export default function OrdersPage() {
-  const pathname = usePathname()
-  const router   = useRouter()
-  const { userId, userName, userEmail } = useUser()
-
-  const [open,       setOpen]       = useState<string | null>(null)
-  const [orders,     setOrders]     = useState<any[]>([])
-  const [loading,    setLoading]    = useState(true)
-  const [refreshing, setRefreshing] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (userId === null) return        // UserContext 아직 로드 중
-    if (!userId) { router.push('/login'); return }
-
-    supabase
-      .from('orders')
-      .select(`
-        id, order_number, amount, original_amount, discount_amount,
-        payment_method, status, download_token, token_expires_at, created_at,
-        templates ( name, slug, stack )
-      `)
-      .eq('user_id', userId)
-      .eq('status', 'completed')
-      .order('created_at', { ascending: false })
-      .then(({ data }) => {
-        setOrders(data ?? [])
-        setLoading(false)
-      })
-  }, [userId])
-
-  // 다운로드 토큰 재발급
-  async function handleRefreshToken(orderId: string) {
-    setRefreshing(orderId)
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const res = await fetch('/api/download/refresh', {
-        method:  'POST',
-        headers: {
-          'Content-Type':  'application/json',
-          Authorization:   `Bearer ${session?.access_token}`,
-        },
-        body: JSON.stringify({ orderId }),
-      })
-      const data = await res.json()
-      if (!res.ok) { alert(data.error); return }
-
-      // 로컬 상태 업데이트
-      setOrders((prev) => prev.map((o) =>
-        o.id === orderId
-          ? { ...o, download_token: data.downloadToken, token_expires_at: data.tokenExpiresAt }
-          : o
-      ))
-      alert('다운로드 링크가 재발급됐어요 (72시간 유효)')
-    } finally {
-      setRefreshing(null)
-    }
-  }
-
-  // 파일 다운로드
-  async function handleDownload(token: string, type: string) {
-    window.location.href = `/api/download?token=${token}&type=${type}`
-  }
+  const pathname                = usePathname()
+  const { userName, userEmail } = useUser()
+  const { orders, loading, refreshing, refreshToken } = useOrders()
+  const [open, setOpen]         = useState<string | null>(null)
 
   const totalAmount = orders.reduce((s, o) => s + o.amount, 0)
   const totalSaved  = orders.reduce((s, o) => s + (o.discount_amount ?? 0), 0)
-
-  const initial = userName?.[0] ?? userEmail?.[0] ?? '?'
+  const initial     = userName?.[0] ?? userEmail?.[0] ?? '?'
 
   return (
     <div className="grid md:grid-cols-[220px_1fr] min-h-[calc(100vh-57px)]">
@@ -122,9 +61,9 @@ export default function OrdersPage() {
         {/* 요약 카드 */}
         <div className="grid grid-cols-3 gap-3 mb-7">
           {[
-            { label: '총 구매 금액',  val: formatPrice(totalAmount),       sub: `${orders.length}건 구매`,    color: '' },
-            { label: '절약한 금액',   val: formatPrice(totalSaved),        sub: '할인 포함',                  color: 'text-teal' },
-            { label: '다운로드 가능', val: `${orders.length}`,             sub: '평생 접근 가능',             color: 'text-lime' },
+            { label: '총 구매 금액',  val: formatPrice(totalAmount), sub: `${orders.length}건 구매`,  color: ''         },
+            { label: '절약한 금액',   val: formatPrice(totalSaved),  sub: '할인 포함',                color: 'text-teal' },
+            { label: '다운로드 가능', val: `${orders.length}`,       sub: '평생 접근 가능',           color: 'text-lime' },
           ].map(({ label, val, sub, color }) => (
             <div key={label} className="card-base rounded-xl p-4">
               <p className="text-[12px] text-sand/35 mb-1.5">{label}</p>
@@ -134,7 +73,6 @@ export default function OrdersPage() {
           ))}
         </div>
 
-        {/* 로딩 */}
         {loading && (
           <div className="flex items-center gap-3 py-16 justify-center text-sand/30">
             <div className="w-5 h-5 border-2 border-lime/30 border-t-lime rounded-full animate-spin" />
@@ -142,7 +80,6 @@ export default function OrdersPage() {
           </div>
         )}
 
-        {/* 빈 상태 */}
         {!loading && orders.length === 0 && (
           <div className="text-center py-20 text-sand/30">
             <p className="text-4xl mb-4">🧾</p>
@@ -151,7 +88,6 @@ export default function OrdersPage() {
           </div>
         )}
 
-        {/* 주문 목록 */}
         {!loading && orders.length > 0 && (
           <div className="space-y-3">
             {orders.map((order) => {
@@ -163,11 +99,8 @@ export default function OrdersPage() {
                   className={`card-base rounded-2xl overflow-hidden transition-colors
                     ${open === order.id ? 'border-lime/20' : 'hover:border-white/14'}`}>
 
-                  {/* 헤더 행 */}
-                  <div
-                    className="flex items-center gap-4 p-5 cursor-pointer"
-                    onClick={() => setOpen(open === order.id ? null : order.id)}
-                  >
+                  <div className="flex items-center gap-4 p-5 cursor-pointer"
+                    onClick={() => setOpen(open === order.id ? null : order.id)}>
                     <div className="w-14 h-11 rounded-xl bg-gradient-to-br from-[#0d1b2a] to-[#1e3a5f]
                                     flex-shrink-0 border border-white/10" />
                     <div className="flex-1 min-w-0">
@@ -180,18 +113,13 @@ export default function OrdersPage() {
                     <span className="font-syne font-bold text-[15px] text-lime">
                       {formatPrice(order.amount)}
                     </span>
-                    <span className={`text-sand/25 transition-transform ${open === order.id ? 'rotate-180' : ''}`}>
-                      ▾
-                    </span>
+                    <span className={`text-sand/25 transition-transform text-[11px] ${open === order.id ? 'rotate-180' : ''}`}>▾</span>
                   </div>
 
-                  {/* 펼쳐진 상세 */}
                   {open === order.id && (
                     <div className="border-t border-white/[0.06] p-5 grid grid-cols-2 gap-5">
                       <div>
-                        <p className="font-syne font-bold text-[11px] text-sand/30 uppercase tracking-wider mb-3">
-                          결제 정보
-                        </p>
+                        <p className="font-syne font-bold text-[11px] text-sand/30 uppercase tracking-wider mb-3">결제 정보</p>
                         {[
                           { k: '결제 수단', v: METHOD_LABEL[order.payment_method] ?? order.payment_method },
                           { k: '결제 금액', v: formatPrice(order.amount) },
@@ -200,56 +128,39 @@ export default function OrdersPage() {
                         ].map(({ k, v }) => (
                           <div key={k} className="flex justify-between text-[12px] py-1.5 border-b border-white/[0.04]">
                             <span className="text-sand/40">{k}</span>
-                            <span className={k === '할인 금액' && order.discount_amount > 0 ? 'text-teal' : ''}>
-                              {v}
-                            </span>
+                            <span>{v}</span>
                           </div>
                         ))}
                       </div>
 
                       <div>
-                        <p className="font-syne font-bold text-[11px] text-sand/30 uppercase tracking-wider mb-3">
-                          파일 정보
-                        </p>
+                        <p className="font-syne font-bold text-[11px] text-sand/30 uppercase tracking-wider mb-3">파일 정보</p>
                         {[
-                          { k: '스택',     v: tmpl?.stack?.[0] ?? '—' },
-                          { k: '버전',     v: 'v1.0 (최신)' },
-                          { k: '업데이트', v: '평생 무료' },
+                          { k: '스택',      v: tmpl?.stack?.[0] ?? '—' },
+                          { k: '버전',      v: 'v1.0 (최신)' },
+                          { k: '업데이트',  v: '평생 무료' },
                           { k: '링크 만료', v: isExpired ? '만료됨' : formatDate(order.token_expires_at) },
                         ].map(({ k, v }) => (
                           <div key={k} className="flex justify-between text-[12px] py-1.5 border-b border-white/[0.04]">
                             <span className="text-sand/40">{k}</span>
-                            <span className={
-                              k === '업데이트' ? 'text-teal' :
-                              k === '링크 만료' && isExpired ? 'text-[#ff5f3f]/70' : ''
-                            }>
-                              {v}
-                            </span>
+                            <span className={k === '링크 만료' && isExpired ? 'text-[#ff5f3f]/70' : ''}>{v}</span>
                           </div>
                         ))}
                       </div>
 
-                      {/* 액션 버튼 */}
                       <div className="col-span-2 flex gap-2 pt-2 border-t border-white/[0.06] flex-wrap">
                         {!isExpired ? (
-                          <button
-                            onClick={() => handleDownload(order.download_token, 'source')}
-                            className="btn-lime text-[12px] px-4 py-2"
-                          >
-                            ⬇ 다운로드
-                          </button>
+                          <Link href="/downloads" className="btn-lime text-[12px] px-4 py-2">
+                            ⬇ 다운로드 페이지
+                          </Link>
                         ) : (
                           <button
-                            onClick={() => handleRefreshToken(order.id)}
+                            onClick={() => refreshToken(order.id)}
                             disabled={refreshing === order.id}
-                            className="btn-lime text-[12px] px-4 py-2 disabled:opacity-50"
-                          >
+                            className="btn-lime text-[12px] px-4 py-2 disabled:opacity-50">
                             {refreshing === order.id ? '재발급 중...' : '↻ 링크 재발급'}
                           </button>
                         )}
-                        <Link href="/downloads" className="btn-ghost text-[12px] px-4 py-2">
-                          📁 다운로드 페이지
-                        </Link>
                       </div>
                     </div>
                   )}

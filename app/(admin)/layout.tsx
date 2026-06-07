@@ -28,6 +28,7 @@ const MENU = [
   { href: '/admin',           icon: '▦',  label: '대시보드'      },
   { href: '/admin/templates', icon: '⊞',  label: '템플릿 관리'   },
   { href: '/admin/orders',    icon: '🧾', label: '주문 조회'     },
+  { href: '/admin/users',     icon: '👤', label: '회원 관리'   },
   { href: '/admin/promos',    icon: '🎟', label: '프로모 코드'   },
 ]
 

@@ -98,11 +98,16 @@ export function TemplateCard({ template, className }: TemplateCardProps) {
               </span>
             )}
           </span>
-<span className="text-[11px] text-sand/30 flex items-center gap-1">
-  ★ {template.rating ?? 0}
-  <span className="text-sand/20">·</span>
-  {(template.download_count ?? 0)}개 후기
-</span>
+<div className="flex items-center gap-2 text-[11px] text-sand/30">
+  <span className="flex items-center gap-0.5">
+    ★ {template.rating ?? 0}
+    <span className="ml-1 text-sand/20">({template.review_count ?? 0})</span>
+  </span>
+  <span className="text-sand/15">·</span>
+  <span className="flex items-center gap-0.5">
+    ⬇ {(template.download_count ?? 0).toLocaleString()}
+  </span>
+</div>
         </div>
       </div>
     </Link>

@@ -1,9 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendPurchaseEmail } from '@/lib/email'
+import { rateLimit, getIP } from '@/lib/rateLimit'
 
 export async function POST(req: NextRequest) {
   try {
+    // ── 0. Rate Limiting ──────────────────────────────────
+    const ip     = getIP(req)
+    const authHeader = req.headers.get('Authorization')
+    const rlKey  = authHeader ? `payment:${authHeader.slice(-12)}` : `payment:${ip}`
+    const rl     = rateLimit(rlKey, 5, 60_000) // 1분에 5회
+
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: '요청이 너무 많아요. 잠시 후 다시 시도해주세요.' },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(Math.ceil((rl.resetAt - Date.now()) / 1000)) },
+        }
+      )
+    }
+
     const {
       paymentKey,
       orderId,
@@ -48,7 +65,7 @@ export async function POST(req: NextRequest) {
     // ── 3. 템플릿 조회 ────────────────────────────────────
     const { data: template, error: tmplErr } = await supabaseAdmin
       .from('templates')
-      .select('id, name, price, original_price, is_published, download_count')
+      .select('id, name, price, original_price, is_published')
       .eq('slug', templateSlug)
       .single()
 
@@ -97,12 +114,33 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 6. 로그인 유저 확인 ───────────────────────────────
-    const authHeader = req.headers.get('Authorization')
     let userId: string | null = null
     if (authHeader?.startsWith('Bearer ')) {
       const token = authHeader.replace('Bearer ', '')
       const { data: { user } } = await supabaseAdmin.auth.getUser(token)
       userId = user?.id ?? null
+    }
+
+    // ── 6-1. 중복 구매 방지 ───────────────────────────────
+    if (userId) {
+      const { data: existing } = await supabaseAdmin
+        .from('orders')
+        .select('id, order_number')
+        .eq('user_id', userId)
+        .eq('template_id', template.id)
+        .eq('status', 'completed')
+        .maybeSingle()
+
+      if (existing) {
+        return NextResponse.json(
+          {
+            error:       '이미 구매한 템플릿이에요.',
+            code:        'ALREADY_PURCHASED',
+            orderNumber: existing.order_number,
+          },
+          { status: 409 }
+        )
+      }
     }
 
     // ── 7. orders 테이블에 저장 ───────────────────────────
@@ -129,11 +167,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: '주문 저장에 실패했어요' }, { status: 500 })
     }
 
-    // ── 8. 다운로드 횟수 증가 ─────────────────────────────
-    await supabaseAdmin
-      .from('templates')
-      .update({ download_count: (template.download_count ?? 0) + 1 })
-      .eq('id', template.id)
+    // ── 8. 템플릿 다운로드 카운트 증가 (RPC) ─────────────
+    await supabaseAdmin.rpc('increment_template_download_count', {
+      template_id: template.id,
+    })
 
     // ── 9. 구매 완료 이메일 발송 ──────────────────────────
     sendPurchaseEmail({

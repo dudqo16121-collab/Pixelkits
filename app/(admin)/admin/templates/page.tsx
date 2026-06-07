@@ -4,42 +4,119 @@ import { supabase } from '@/lib/supabase'
 import { formatPrice } from '@/lib/utils'
 import type { Template, TemplateCategory, TemplateStack } from '@/types'
 
+// ── 뱃지 색상 ──────────────────────────────────────────────
 const BADGE_COLORS: Record<string, string> = {
-  new:  'bg-lime/15 text-lime',
-  hot:  'bg-[#ff5f3f]/15 text-[#ff5f3f]',
-  free: 'bg-teal/15 text-teal',
-  sale: 'bg-amber-500/15 text-amber-400',
-}
-
-const EMPTY_FORM: Partial<Template> = {
-  name: '', slug: '', description: '',
-  category: 'landing', stack: [],
-  price: 0, original_price: 0,
-  thumbnail_url: '', preview_url: '', download_url: '',
-  file_size_kb: 0, badge: undefined,
-  rating: 5.0, download_count: 0,
-  features: [], sections: [],
-  is_published: true,
+  new:  'bg-lime/15 text-lime border border-lime/25',
+  hot:  'bg-[#ff5f3f]/15 text-[#ff5f3f] border border-[#ff5f3f]/25',
+  free: 'bg-teal/15 text-teal border border-teal/25',
+  sale: 'bg-amber-400/15 text-amber-400 border border-amber-400/25',
 }
 
 const CATEGORIES: TemplateCategory[] = ['landing', 'saas', 'portfolio', 'ecom', 'dashboard', 'blog']
 const STACKS: TemplateStack[]        = ['nextjs', 'react', 'vue', 'html', 'astro']
-const BADGES                         = ['new', 'hot', 'free', 'sale']
+const BADGES                         = ['', 'new', 'hot', 'free', 'sale']
 
+// ── 빈 폼 ──────────────────────────────────────────────────
+const EMPTY_FORM: Partial<Template> = {
+  name:          '',
+  slug:          '',
+  description:   '',
+  category:      'landing',
+  stack:         [],
+  price:         0,
+  original_price: 0,
+  preview_url:   '',
+  badge:         undefined,
+  features:      [],
+  sections:      [],
+  is_published:  false,
+  rating:        5.0,
+  file_size_kb:  0,
+  download_count: 0,
+}
+
+// ── 서브 컴포넌트: Field ────────────────────────────────────
+function Field({ label, error, children }: {
+  label: string
+  error?: string
+  children: React.ReactNode
+}) {
+  return (
+    <div>
+      <label className="text-[12px] text-sand/45 mb-1.5 block font-medium">{label}</label>
+      {children}
+      {error && <p className="text-[11px] text-[#ff5f3f] mt-1">{error}</p>}
+    </div>
+  )
+}
+
+// ── 서브 컴포넌트: ArrayField ───────────────────────────────
+function ArrayField({ label, sub, items, onAdd, onRemove, placeholder }: {
+  label: string
+  sub?: string
+  items: string[]
+  onAdd: (v: string) => void
+  onRemove: (i: number) => void
+  placeholder?: string
+}) {
+  const [val, setVal] = useState('')
+  return (
+    <div>
+      <p className="text-[12px] text-sand/45 mb-1 font-medium">{label}</p>
+      {sub && <p className="text-[11px] text-sand/25 mb-2">{sub}</p>}
+      <div className="flex gap-2 mb-2">
+        <input
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onAdd(val); setVal('') } }}
+          placeholder={placeholder}
+          className="flex-1 bg-[#0d0d0d] border border-white/10 rounded-xl px-4 py-2.5
+                     text-[13px] text-sand placeholder:text-sand/20 outline-none
+                     focus:border-lime/40 transition-colors"
+        />
+        <button
+          type="button"
+          onClick={() => { onAdd(val); setVal('') }}
+          className="border border-white/15 rounded-xl px-4 py-2.5 text-[13px]
+                     text-sand/50 hover:text-sand hover:border-white/30 transition-colors cursor-pointer">
+          추가
+        </button>
+      </div>
+      {items.length > 0 && (
+        <div className="space-y-1">
+          {items.map((item, i) => (
+            <div key={i} className="flex items-center gap-2 bg-white/[0.03] border border-white/[0.06]
+                                    rounded-lg px-3 py-2 text-[12px]">
+              <span className="flex-1 text-sand/70">{item}</span>
+              <button
+                type="button"
+                onClick={() => onRemove(i)}
+                className="text-sand/25 hover:text-[#ff5f3f] transition-colors cursor-pointer">
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 메인 컴포넌트 ───────────────────────────────────────────
 export default function AdminTemplatesPage() {
   const [templates,       setTemplates]       = useState<Template[]>([])
   const [loading,         setLoading]         = useState(true)
   const [modal,           setModal]           = useState<'add' | 'edit' | null>(null)
-  const [form,            setForm]            = useState<Partial<Template>>(EMPTY_FORM)
-  const [deleteId,        setDeleteId]        = useState<string | null>(null)
-  const [saving,          setSaving]          = useState(false)
-  const [errors,          setErrors]          = useState<Record<string, string>>({})
   const [tab,             setTab]             = useState<'basic' | 'detail' | 'files'>('basic')
+  const [form,            setForm]            = useState<Partial<Template>>(EMPTY_FORM)
+  const [errors,          setErrors]          = useState<Record<string, string>>({})
+  const [saving,          setSaving]          = useState(false)
+  const [deleteId,        setDeleteId]        = useState<string | null>(null)
+  const [thumbPreview,    setThumbPreview]    = useState<string | null>(null)
   const [uploadingThumb,  setUploadingThumb]  = useState(false)
   const [uploadingZip,    setUploadingZip]    = useState(false)
   const [uploadingGuide,  setUploadingGuide]  = useState(false)
   const [uploadingLicense,setUploadingLicense]= useState(false)
-  const [thumbPreview,    setThumbPreview]    = useState<string | null>(null)
 
   useEffect(() => { fetchTemplates() }, [])
 
@@ -88,9 +165,7 @@ export default function AdminTemplatesPage() {
   async function handleSave() {
     if (!validate()) { setTab('basic'); return }
     setSaving(true)
-
     const payload = { ...form, updated_at: new Date().toISOString() }
-
     if (modal === 'edit' && form.id) {
       const { error } = await supabase.from('templates').update(payload).eq('id', form.id)
       if (error) { alert('수정 실패: ' + error.message); setSaving(false); return }
@@ -98,7 +173,6 @@ export default function AdminTemplatesPage() {
       const { error } = await supabase.from('templates').insert({ ...payload, created_at: new Date().toISOString() })
       if (error) { alert('추가 실패: ' + error.message); setSaving(false); return }
     }
-
     await fetchTemplates()
     setModal(null)
     setSaving(false)
@@ -127,51 +201,71 @@ export default function AdminTemplatesPage() {
     set('stack', cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s])
   }
 
-  // ── 파일 업로드 함수들 ──────────────────────────────────
+  // ── 공통 업로드 헬퍼 (API Route 경유 → supabaseAdmin 사용) ──
+  async function adminUpload(file: File, bucket: string, path: string): Promise<string | null> {
+    const { data: { session } } = await supabase.auth.getSession()
+    const formData = new FormData()
+    formData.append('file',   file)
+    formData.append('bucket', bucket)
+    formData.append('path',   path)
+    const res = await fetch('/api/admin/upload', {
+      method:  'POST',
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+      body:    formData,
+    })
+    const data = await res.json()
+    if (!res.ok) { alert('업로드 실패: ' + data.error); return null }
+    return data.publicUrl ?? data.path ?? path
+  }
+
+  // ── 썸네일 업로드 ─────────────────────────────────────────
   async function uploadThumbnail(file: File) {
     if (file.size > 5 * 1024 * 1024) { alert('썸네일은 5MB 이하만 가능해요'); return }
     setUploadingThumb(true)
     const ext  = file.name.split('.').pop()
     const slug = form.slug || `thumb-${Date.now()}`
     const path = `${slug}.${ext}`
-    const { error } = await supabase.storage.from('thumbnails').upload(path, file, { upsert: true })
-    if (error) { alert('썸네일 업로드 실패: ' + error.message); setUploadingThumb(false); return }
-    const { data: { publicUrl } } = supabase.storage.from('thumbnails').getPublicUrl(path)
-    set('thumbnail_url', publicUrl)
-    setThumbPreview(publicUrl)
+    const publicUrl = await adminUpload(file, 'thumbnails', path)
+    if (publicUrl) { set('thumbnail_url', publicUrl); setThumbPreview(publicUrl) }
     setUploadingThumb(false)
   }
 
+  // ── ZIP 업로드 ────────────────────────────────────────────
   async function uploadZip(file: File) {
     if (!file.name.endsWith('.zip')) { alert('.zip 파일만 업로드 가능해요'); return }
     if (file.size > 200 * 1024 * 1024) { alert('ZIP은 200MB 이하만 가능해요'); return }
     setUploadingZip(true)
     const slug = form.slug || `template-${Date.now()}`
     const path = `${slug}.zip`
-    const { error } = await supabase.storage.from('templates').upload(path, file, { upsert: true })
-    if (error) { alert('ZIP 업로드 실패: ' + error.message); setUploadingZip(false); return }
-    set('download_url', path)
-    set('file_size_kb', Math.round(file.size / 1024))
+    const result = await adminUpload(file, 'templates', path)
+    if (result) { set('download_url', path); set('file_size_kb', Math.round(file.size / 1024)) }
     setUploadingZip(false)
   }
 
+  // ── 가이드 PDF 업로드 ─────────────────────────────────────
   async function uploadGuide(file: File) {
     if (!file.name.endsWith('.pdf')) { alert('PDF 파일만 업로드 가능해요'); return }
     setUploadingGuide(true)
     const slug = form.slug || `guide-${Date.now()}`
-    const { error } = await supabase.storage.from('templates').upload(`${slug}-guide.pdf`, file, { upsert: true })
-    if (error) { alert('가이드 업로드 실패: ' + error.message) }
+    await adminUpload(file, 'templates', `${slug}-guide.pdf`)
     setUploadingGuide(false)
   }
 
+  // ── 라이선스 TXT 업로드 ───────────────────────────────────
   async function uploadLicense(file: File) {
     setUploadingLicense(true)
     const slug = form.slug || `license-${Date.now()}`
-    const { error } = await supabase.storage.from('templates').upload(`${slug}-license.txt`, file, { upsert: true })
-    if (error) { alert('라이선스 업로드 실패: ' + error.message) }
+    await adminUpload(file, 'templates', `${slug}-license.txt`)
     setUploadingLicense(false)
   }
 
+  // ── input 스타일 헬퍼 ─────────────────────────────────────
+  const input = (err?: string) =>
+    `w-full bg-[#0d0d0d] border rounded-xl px-4 py-2.5 text-[13px] text-sand
+     placeholder:text-sand/20 outline-none focus:border-lime/40 transition-colors
+     ${err ? 'border-[#ff5f3f]/50' : 'border-white/10'}`
+
+  // ── uploadZone 클래스 헬퍼 ────────────────────────────────
   const uploadZone = (uploading: boolean, done: boolean, icon: string, label: string, sub: string) =>
     `flex ${done ? 'items-center gap-4' : 'flex-col items-center gap-2'} border-2 border-dashed rounded-xl
      ${done ? 'px-5 py-4' : 'p-6'} cursor-pointer transition-all
@@ -183,7 +277,8 @@ export default function AdminTemplatesPage() {
 
   return (
     <div className="p-8">
-      {/* 헤더 */}
+
+      {/* ── 헤더 ── */}
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="font-syne font-extrabold text-2xl tracking-tight mb-1">템플릿 관리</h1>
@@ -196,7 +291,7 @@ export default function AdminTemplatesPage() {
         </button>
       </div>
 
-      {/* 테이블 */}
+      {/* ── 테이블 ── */}
       <div className="bg-[#111] border border-white/[0.07] rounded-2xl overflow-hidden">
         <div className="grid grid-cols-[2fr_1fr_1fr_80px_80px_140px] gap-4 px-6 py-3
                         border-b border-white/[0.07] text-[11px] text-sand/30
@@ -278,6 +373,30 @@ export default function AdminTemplatesPage() {
         ))}
       </div>
 
+      {/* ── 삭제 확인 모달 ── */}
+      {deleteId && (
+        <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#111] border border-white/10 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 className="font-syne font-bold text-[16px] mb-2">템플릿 삭제</h3>
+            <p className="text-[13px] text-sand/50 mb-6">
+              정말 삭제할까요? 이 작업은 되돌릴 수 없어요.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setDeleteId(null)}
+                className="border border-white/10 rounded-xl px-5 py-2.5 text-[13px]
+                           text-sand/50 hover:text-sand transition-colors cursor-pointer">
+                취소
+              </button>
+              <button onClick={() => handleDelete(deleteId)}
+                className="bg-[#ff5f3f] text-white font-bold rounded-xl px-5 py-2.5
+                           text-[13px] hover:opacity-85 transition-opacity cursor-pointer">
+                삭제
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── 추가 / 수정 모달 ── */}
       {modal && (
         <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50 p-4">
@@ -320,10 +439,11 @@ export default function AdminTemplatesPage() {
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
                     <Field label="템플릿 이름 *" error={errors.name}>
-                      <input value={form.name ?? ''} onChange={(e) => set('name', e.target.value)}
+                      <input value={form.name ?? ''}
+                        onChange={(e) => set('name', e.target.value)}
                         placeholder="Lumina SaaS Kit" className={input(errors.name)} />
                     </Field>
-                    <Field label="Slug (URL) *" error={errors.slug}>
+                    <Field label="Slug *" error={errors.slug}>
                       <input value={form.slug ?? ''}
                         onChange={(e) => set('slug', e.target.value.toLowerCase().replace(/\s+/g, '-'))}
                         placeholder="lumina-saas-kit" className={input(errors.slug)} />
@@ -331,9 +451,10 @@ export default function AdminTemplatesPage() {
                   </div>
 
                   <Field label="설명 *" error={errors.description}>
-                    <textarea rows={3} value={form.description ?? ''}
+                    <textarea value={form.description ?? ''}
                       onChange={(e) => set('description', e.target.value)}
-                      placeholder="템플릿에 대한 간결한 설명을 입력하세요"
+                      placeholder="템플릿에 대한 간략한 설명을 입력해주세요"
+                      rows={3}
                       className={input(errors.description) + ' resize-none'} />
                   </Field>
 
@@ -342,24 +463,27 @@ export default function AdminTemplatesPage() {
                       <select value={form.category ?? 'landing'}
                         onChange={(e) => set('category', e.target.value as TemplateCategory)}
                         className={input()}>
-                        {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                        {CATEGORIES.map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
                       </select>
                     </Field>
                     <Field label="뱃지">
                       <select value={form.badge ?? ''}
                         onChange={(e) => set('badge', (e.target.value || undefined) as any)}
                         className={input()}>
-                        <option value="">없음</option>
-                        {BADGES.map((b) => <option key={b} value={b}>{b.toUpperCase()}</option>)}
+                        {BADGES.map((b) => (
+                          <option key={b} value={b}>{b || '없음'}</option>
+                        ))}
                       </select>
                     </Field>
                   </div>
 
                   <Field label="기술 스택">
-                    <div className="flex gap-2 flex-wrap mt-1">
+                    <div className="flex flex-wrap gap-2 mt-1">
                       {STACKS.map((s) => (
-                        <button key={s} onClick={() => toggleStack(s)}
-                          className={`px-3 py-1.5 rounded-lg text-[12px] border transition-all cursor-pointer
+                        <button key={s} type="button" onClick={() => toggleStack(s)}
+                          className={`text-[12px] px-3 py-1.5 rounded-lg border transition-all cursor-pointer
                             ${(form.stack ?? []).includes(s)
                               ? 'bg-lime/10 border-lime/30 text-lime'
                               : 'bg-transparent border-white/10 text-sand/50 hover:border-white/25'}`}>
@@ -439,124 +563,87 @@ export default function AdminTemplatesPage() {
                                          ? 'border-lime/40 bg-lime/[0.04] pointer-events-none'
                                          : 'border-white/10 hover:border-lime/30 hover:bg-lime/[0.02]'}`}>
                       {uploadingThumb ? (
-                        <div className="flex items-center gap-2 text-sand/50 text-[13px]">
-                          <div className="w-4 h-4 border-2 border-lime/30 border-t-lime rounded-full animate-spin" />
-                          업로드 중...
-                        </div>
+                        <div className="w-5 h-5 border-2 border-lime/30 border-t-lime rounded-full animate-spin" />
                       ) : (
                         <>
                           <span className="text-2xl">🖼</span>
-                          <span className="text-[13px] text-sand/40">클릭하거나 이미지를 여기에 드래그해요</span>
-                          <span className="text-[11px] text-sand/25">권장 크기: 1200×800px</span>
+                          <span className="text-[12px] text-sand/40">클릭하거나 파일을 드래그하세요</span>
                         </>
                       )}
                       <input type="file" accept="image/*" className="hidden"
                         onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadThumbnail(f) }} />
                     </label>
-                    <input value={form.thumbnail_url ?? ''}
-                      onChange={(e) => { set('thumbnail_url', e.target.value); setThumbPreview(e.target.value) }}
-                      placeholder="또는 URL 직접 입력"
-                      className="w-full mt-2 bg-[#0d0d0d] border border-white/[0.07] rounded-xl px-3 py-2
-                                 text-[12px] text-sand/50 placeholder:text-sand/20
-                                 outline-none focus:border-lime/30 transition-colors" />
                   </div>
 
-                  {/* 소스코드 ZIP */}
+                  {/* ZIP 파일 */}
                   <div>
                     <p className="text-[12px] text-sand/45 mb-2 font-medium">
-                      소스코드 ZIP <span className="text-sand/25 font-normal">(ZIP만 가능, 200MB 이하)</span>
+                      소스코드 ZIP <span className="text-sand/25 font-normal">(.zip, 200MB 이하)</span>
                     </p>
-                    <label className={`flex ${form.download_url ? 'items-center gap-4 px-5 py-4' : 'flex-col items-center gap-2 p-6'}
-                                       border-2 border-dashed rounded-xl cursor-pointer transition-all
-                                       ${uploadingZip
-                                         ? 'border-lime/40 bg-lime/[0.04] pointer-events-none'
-                                         : form.download_url
-                                         ? 'border-teal/30 bg-teal/[0.04]'
-                                         : 'border-white/10 hover:border-lime/30 hover:bg-lime/[0.02]'}`}>
+                    <label className={uploadZone(
+                      uploadingZip,
+                      !!form.download_url,
+                      '🗜',
+                      'ZIP 파일 업로드',
+                      '.zip 파일만 가능해요'
+                    )}>
                       {uploadingZip ? (
-                        <div className="flex items-center gap-2 text-sand/50 text-[13px]">
-                          <div className="w-4 h-4 border-2 border-lime/30 border-t-lime rounded-full animate-spin" />
-                          업로드 중...
-                        </div>
+                        <div className="w-5 h-5 border-2 border-lime/30 border-t-lime rounded-full animate-spin" />
                       ) : form.download_url ? (
                         <>
-                          <span className="text-xl">🗜</span>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[13px] text-teal truncate">{form.download_url}</p>
-                            <p className="text-[11px] text-sand/30 mt-0.5">
-                              {form.file_size_kb ? `${(form.file_size_kb / 1024).toFixed(1)} MB` : '크기 확인 중'}
-                            </p>
+                          <span className="text-teal text-lg">✓</span>
+                          <div>
+                            <p className="text-[13px] text-teal font-medium">업로드 완료</p>
+                            <p className="text-[11px] text-sand/30 font-mono">{form.download_url}</p>
                           </div>
-                          <span className="text-[11px] text-teal border border-teal/25 rounded-lg px-2 py-1 flex-shrink-0">
-                            ✓ 업로드됨
-                          </span>
                         </>
                       ) : (
                         <>
                           <span className="text-2xl">🗜</span>
-                          <div className="text-center">
-                            <p className="text-[13px] text-sand/40">ZIP 파일을 업로드하거나 드래그해요</p>
-                            <p className="text-[11px] text-sand/25 mt-0.5">slug가 파일명으로 사용돼요</p>
-                          </div>
+                          <span className="text-[12px] text-sand/40">ZIP 파일을 업로드하세요</span>
                         </>
                       )}
                       <input type="file" accept=".zip" className="hidden"
                         onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadZip(f) }} />
                     </label>
-                    <input value={form.download_url ?? ''}
-                      onChange={(e) => set('download_url', e.target.value)}
-                      placeholder="또는 Storage 경로 직접 입력 (예: lumina-saas-kit.zip)"
-                      className="w-full mt-2 bg-[#0d0d0d] border border-white/[0.07] rounded-xl px-3 py-2
-                                 text-[12px] text-sand/50 placeholder:text-sand/20
-                                 outline-none focus:border-lime/30 transition-colors" />
                   </div>
 
-                  {/* 가이드 PDF + 라이선스 TXT */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-[12px] text-sand/45 mb-2 font-medium">설치 가이드 PDF</p>
-                      <label className={`flex flex-col items-center gap-2 border-2 border-dashed rounded-xl p-4
-                                         cursor-pointer transition-all
-                                         ${uploadingGuide
-                                           ? 'border-lime/40 bg-lime/[0.04] pointer-events-none'
-                                           : 'border-white/10 hover:border-lime/30 hover:bg-lime/[0.02]'}`}>
-                        {uploadingGuide ? (
-                          <div className="flex items-center gap-2 text-sand/50 text-[12px]">
-                            <div className="w-3 h-3 border-2 border-lime/30 border-t-lime rounded-full animate-spin" />
-                            업로드 중...
-                          </div>
-                        ) : (
-                          <>
-                            <span className="text-xl">📄</span>
-                            <span className="text-[12px] text-sand/35">PDF 업로드</span>
-                          </>
-                        )}
-                        <input type="file" accept=".pdf" className="hidden"
-                          onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadGuide(f) }} />
-                      </label>
-                    </div>
-                    <div>
-                      <p className="text-[12px] text-sand/45 mb-2 font-medium">라이선스 파일</p>
-                      <label className={`flex flex-col items-center gap-2 border-2 border-dashed rounded-xl p-4
-                                         cursor-pointer transition-all
-                                         ${uploadingLicense
-                                           ? 'border-lime/40 bg-lime/[0.04] pointer-events-none'
-                                           : 'border-white/10 hover:border-lime/30 hover:bg-lime/[0.02]'}`}>
-                        {uploadingLicense ? (
-                          <div className="flex items-center gap-2 text-sand/50 text-[12px]">
-                            <div className="w-3 h-3 border-2 border-lime/30 border-t-lime rounded-full animate-spin" />
-                            업로드 중...
-                          </div>
-                        ) : (
-                          <>
-                            <span className="text-xl">📋</span>
-                            <span className="text-[12px] text-sand/35">TXT 업로드</span>
-                          </>
-                        )}
-                        <input type="file" accept=".txt" className="hidden"
-                          onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadLicense(f) }} />
-                      </label>
-                    </div>
+                  {/* 가이드 PDF */}
+                  <div>
+                    <p className="text-[12px] text-sand/45 mb-2 font-medium">
+                      설치 가이드 PDF <span className="text-sand/25 font-normal">(선택)</span>
+                    </p>
+                    <label className={uploadZone(uploadingGuide, false, '📄', '가이드 PDF', '.pdf만 가능')}>
+                      {uploadingGuide ? (
+                        <div className="w-5 h-5 border-2 border-lime/30 border-t-lime rounded-full animate-spin" />
+                      ) : (
+                        <>
+                          <span className="text-2xl">📄</span>
+                          <span className="text-[12px] text-sand/40">PDF 파일을 업로드하세요</span>
+                        </>
+                      )}
+                      <input type="file" accept=".pdf" className="hidden"
+                        onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadGuide(f) }} />
+                    </label>
+                  </div>
+
+                  {/* 라이선스 */}
+                  <div>
+                    <p className="text-[12px] text-sand/45 mb-2 font-medium">
+                      라이선스 파일 <span className="text-sand/25 font-normal">(선택, .txt)</span>
+                    </p>
+                    <label className={uploadZone(uploadingLicense, false, '📋', '라이선스', '.txt만 가능')}>
+                      {uploadingLicense ? (
+                        <div className="w-5 h-5 border-2 border-lime/30 border-t-lime rounded-full animate-spin" />
+                      ) : (
+                        <>
+                          <span className="text-2xl">📋</span>
+                          <span className="text-[12px] text-sand/40">라이선스 파일을 업로드하세요</span>
+                        </>
+                      )}
+                      <input type="file" accept=".txt" className="hidden"
+                        onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadLicense(f) }} />
+                    </label>
                   </div>
 
                   {/* 파일 크기 + 평점 */}
@@ -652,110 +739,11 @@ export default function AdminTemplatesPage() {
                   className="bg-lime text-ink font-syne font-bold rounded-xl px-5 py-2.5
                              text-[13px] hover:opacity-85 transition-opacity cursor-pointer
                              disabled:opacity-40 disabled:cursor-not-allowed">
-                  {saving ? '저장 중...' : modal === 'edit' ? '수정 완료' : '추가하기'}
+                  {saving ? '저장 중...' : modal === 'edit' ? '저장' : '추가'}
                 </button>
               </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* 삭제 확인 모달 */}
-      {deleteId && (
-        <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50">
-          <div className="bg-[#111] border border-white/10 rounded-2xl p-6 w-80">
-            <h3 className="font-syne font-bold text-[16px] mb-2">정말 삭제할까요?</h3>
-            <p className="text-[13px] text-sand/45 mb-6">
-              삭제하면 되돌릴 수 없어요. 연결된 주문이 있으면 삭제가 안 될 수 있어요.
-            </p>
-            <div className="flex gap-2">
-              <button onClick={() => setDeleteId(null)}
-                className="flex-1 border border-white/10 rounded-xl py-2.5 text-[13px]
-                           text-sand/50 hover:text-sand transition-colors cursor-pointer">
-                취소
-              </button>
-              <button onClick={() => handleDelete(deleteId)}
-                className="flex-1 bg-[#ff5f3f] text-white rounded-xl py-2.5 text-[13px]
-                           font-medium hover:opacity-85 transition-opacity cursor-pointer">
-                삭제
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── 공통 컴포넌트 ─────────────────────────────────────────
-
-function input(error?: string) {
-  return `w-full bg-[#0d0d0d] border rounded-xl px-4 py-3 text-[14px] text-sand
-          placeholder:text-sand/20 outline-none transition-colors
-          ${error ? 'border-[#ff5f3f]/40 focus:border-[#ff5f3f]/70' : 'border-white/10 focus:border-lime/40'}`
-}
-
-function Field({ label, error, children }: {
-  label: string; error?: string; children: React.ReactNode
-}) {
-  return (
-    <div>
-      <label className="text-[12px] text-sand/45 mb-1.5 block">{label}</label>
-      {children}
-      {error && <p className="text-[11px] text-[#ff5f3f] mt-1">{error}</p>}
-    </div>
-  )
-}
-
-function ArrayField({ label, sub, items, onAdd, onRemove, placeholder }: {
-  label: string; sub: string
-  items: string[]
-  onAdd: (v: string) => void
-  onRemove: (i: number) => void
-  placeholder: string
-}) {
-  const [val, setVal] = useState('')
-
-  function handleAdd() {
-    if (!val.trim()) return
-    onAdd(val)
-    setVal('')
-  }
-
-  return (
-    <div>
-      <label className="text-[12px] text-sand/45 mb-0.5 block">{label}</label>
-      <p className="text-[11px] text-sand/25 mb-2">{sub}</p>
-      <div className="flex gap-2 mb-3">
-        <input value={val} onChange={(e) => setVal(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAdd())}
-          placeholder={placeholder}
-          className="flex-1 bg-[#0d0d0d] border border-white/10 rounded-xl px-4 py-2.5
-                     text-[13px] text-sand placeholder:text-sand/20 outline-none
-                     focus:border-lime/40 transition-colors" />
-        <button onClick={handleAdd}
-          className="bg-lime/10 border border-lime/25 text-lime rounded-xl px-4 py-2.5
-                     text-[13px] hover:bg-lime/20 transition-colors cursor-pointer">
-          + 추가
-        </button>
-      </div>
-      {items.length === 0 ? (
-        <p className="text-[12px] text-sand/20 text-center py-4 border border-dashed border-white/[0.08] rounded-xl">
-          아직 추가된 항목이 없어요
-        </p>
-      ) : (
-        <div className="space-y-1.5">
-          {items.map((item, i) => (
-            <div key={i} className="flex items-center gap-2 bg-white/[0.03] border border-white/[0.06]
-                                    rounded-lg px-3 py-2">
-              <span className="text-lime text-[11px] flex-shrink-0">✓</span>
-              <span className="text-[13px] text-sand/70 flex-1">{item}</span>
-              <button onClick={() => onRemove(i)}
-                className="text-sand/25 hover:text-[#ff5f3f] transition-colors cursor-pointer text-[15px]">
-                ✕
-              </button>
-            </div>
-          ))}
         </div>
       )}
     </div>

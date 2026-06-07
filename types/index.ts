@@ -25,6 +25,7 @@ export interface Template {
   badge?: 'new' | 'hot' | 'free' | 'sale'
   rating: number
   download_count: number
+  review_count:   number
   features: string[]             // 포함 기능 목록
   sections: string[]             // 섹션 구성 목록
   is_published: boolean   // ← 이 줄 추가
