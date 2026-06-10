@@ -1,55 +1,87 @@
-// 메모리 기반 슬라이딩 윈도우 Rate Limiter
-// Vercel 같은 서버리스 환경: 인스턴스 per 프로세스 기준
+// ── Upstash Redis Rate Limiter (분산 환경 대응)
+// UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN 없으면 메모리 fallback
 
-interface RateLimitEntry {
-  count:     number
-  resetAt:   number
+let redisRateLimiter: any = null
+
+// Upstash 환경변수 있을 때만 Redis 사용
+async function getRedisLimiter(limit: number, windowMs: number) {
+  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+    return null
+  }
+  try {
+    const { Ratelimit } = await import('@upstash/ratelimit')
+    const { Redis }     = await import('@upstash/redis')
+
+    const redis = new Redis({
+      url:   process.env.UPSTASH_REDIS_REST_URL,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN,
+    })
+
+    return new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(limit, `${Math.floor(windowMs / 1000)} s`),
+    })
+  } catch {
+    return null
+  }
 }
 
-const store = new Map<string, RateLimitEntry>()
+// ── 메모리 fallback ───────────────────────────────────
+interface MemEntry { count: number; resetAt: number }
+const memStore = new Map<string, MemEntry>()
 
-// 오래된 항목 주기적 정리 (메모리 누수 방지)
 setInterval(() => {
   const now = Date.now()
-  for (const [key, val] of store) {
-    if (val.resetAt < now) store.delete(key)
+  for (const [k, v] of memStore) {
+    if (v.resetAt < now) memStore.delete(k)
   }
 }, 60_000)
 
-export interface RateLimitResult {
-  allowed:    boolean
-  remaining:  number
-  resetAt:    number
-}
-
-/**
- * @param key      식별자 (IP, userId 등)
- * @param limit    허용 횟수
- * @param windowMs 윈도우 시간 (ms)
- */
-export function rateLimit(
-  key:      string,
-  limit:    number,
-  windowMs: number
-): RateLimitResult {
+function memRateLimit(key: string, limit: number, windowMs: number): RateLimitResult {
   const now   = Date.now()
-  const entry = store.get(key)
-
+  const entry = memStore.get(key)
   if (!entry || entry.resetAt < now) {
-    // 새 윈도우 시작
-    store.set(key, { count: 1, resetAt: now + windowMs })
+    memStore.set(key, { count: 1, resetAt: now + windowMs })
     return { allowed: true, remaining: limit - 1, resetAt: now + windowMs }
   }
-
   if (entry.count >= limit) {
     return { allowed: false, remaining: 0, resetAt: entry.resetAt }
   }
-
   entry.count += 1
   return { allowed: true, remaining: limit - entry.count, resetAt: entry.resetAt }
 }
 
-// IP 추출 헬퍼
+// ── 공개 인터페이스 ───────────────────────────────────
+export interface RateLimitResult {
+  allowed:   boolean
+  remaining: number
+  resetAt:   number
+}
+
+export async function rateLimit(
+  key:      string,
+  limit:    number,
+  windowMs: number,
+): Promise<RateLimitResult> {
+  // Redis 시도
+  const limiter = await getRedisLimiter(limit, windowMs)
+  if (limiter) {
+    try {
+      const { success, remaining, reset } = await limiter.limit(key)
+      return {
+        allowed:   success,
+        remaining: remaining ?? 0,
+        resetAt:   reset ? Number(reset) : Date.now() + windowMs,
+      }
+    } catch {
+      // Redis 오류 시 메모리 fallback
+    }
+  }
+  // 메모리 fallback
+  return memRateLimit(key, limit, windowMs)
+}
+
+// ── IP 추출 헬퍼 ─────────────────────────────────────
 export function getIP(req: Request): string {
   const forwarded = (req.headers as any).get?.('x-forwarded-for')
     ?? (req.headers as any)['x-forwarded-for']

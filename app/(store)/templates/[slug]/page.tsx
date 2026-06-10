@@ -1,7 +1,7 @@
 import { notFound }          from 'next/navigation'
 import Link                  from 'next/link'
 import type { Metadata }     from 'next'
-import { getTemplateBySlug } from '@/lib/templates'
+import { getTemplateBySlugServer as getTemplateBySlug } from '@/lib/templates.server'
 import { Badge }             from '@/components/ui/Badge'
 import { discountPercent }   from '@/lib/utils'
 import { ReviewSection }     from '@/components/sections/ReviewSection'
@@ -24,7 +24,12 @@ export async function generateMetadata(
       title:       `${title} — pixelkits`,
       description,
       url:         `https://pixelkits.co/templates/${params.slug}`,
-      images: [{ url: imageUrl, width: 1200, height: 630, alt: title }],
+      images: [{
+  url:    `/api/og/${params.slug}`,  // ← 동적 OG 이미지
+  width:  1200,
+  height: 630,
+  alt:    template.name,
+}],
     },
     twitter: {
       card:        'summary_large_image',

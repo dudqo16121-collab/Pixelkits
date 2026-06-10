@@ -5,7 +5,7 @@ import { rateLimit, getIP } from '@/lib/rateLimit'
 export async function GET(req: NextRequest) {
   // ── 0. Rate Limiting ──────────────────────────────────
   const ip = getIP(req)
-  const rl = rateLimit(`download:${ip}`, 20, 60_000) // 1분에 20회
+  const rl = await rateLimit(`download:${ip}`, 20, 60_000)
 
   if (!rl.allowed) {
     return NextResponse.json(

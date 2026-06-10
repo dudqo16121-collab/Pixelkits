@@ -1,5 +1,7 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { filterTemplates } from '@/lib/templates'
 import { TemplateCard } from '@/components/ui/TemplateCard'
 import { toggleWish as toggleWishDB } from '@/lib/wishlist'
@@ -16,29 +18,28 @@ const CATEGORY_LABELS: Record<string, string> = {
   blog:      '블로그',
 }
 
-// DB 저장값과 일치하는 소문자
 const STACK_OPTIONS = ['nextjs', 'react', 'vue', 'html', 'astro']
-
-// UI 표시용 라벨
 const STACK_LABELS: Record<string, string> = {
-  nextjs: 'Next.js',
-  react:  'React',
-  vue:    'Vue',
-  html:   'HTML',
-  astro:  'Astro',
+  nextjs: 'Next.js', react: 'React', vue: 'Vue', html: 'HTML', astro: 'Astro',
 }
 
 export function TemplatesClient() {
-  const [templates, setTemplates] = useState<Template[]>([])
-  const [loading,   setLoading]   = useState(true)
-  const [query,     setQuery]     = useState('')
-  const [category,  setCategory]  = useState('all')
-  const [sort,      setSort]      = useState('popular')
-  const [stacks,    setStacks]    = useState<string[]>([])
-  const [maxPrice,  setMaxPrice]  = useState(100)
-  const [gridView,  setGridView]  = useState(true)
-  const [wished,    setWished]    = useState<Set<string>>(new Set())
-  const [userId,    setUserId]    = useState<string | null>(null)
+  const router = useRouter()
+
+  const [templates,  setTemplates]  = useState<Template[]>([])
+  const [loading,    setLoading]    = useState(true)
+  const [query,      setQuery]      = useState('')
+  const [debouncedQ, setDebouncedQ] = useState('')
+  const [category,   setCategory]   = useState('all')
+  const [sort,       setSort]       = useState('popular')
+  const [stacks,     setStacks]     = useState<string[]>([])
+  const [maxPrice,   setMaxPrice]   = useState(100)
+  const [gridView,   setGridView]   = useState(true)
+  const [wished,     setWished]     = useState<Set<string>>(new Set())
+  const [userId,     setUserId]     = useState<string | null>(null)
+
+  // 비교 기능
+  const [compareList, setCompareList] = useState<string[]>([]) // slug 배열
 
   // 로그인 유저 + 찜 목록 로드
   useEffect(() => {
@@ -46,7 +47,7 @@ export function TemplatesClient() {
       if (!user) return
       setUserId(user.id)
       supabase
-        .from('wishlist')           // ← wishlists → wishlist 수정
+        .from('wishlist')
         .select('template_id')
         .eq('user_id', user.id)
         .then(({ data }) => {
@@ -55,26 +56,31 @@ export function TemplatesClient() {
     })
   }, [])
 
-  // 템플릿 조회
+  // 검색 debounce — 400ms
   useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(query), 400)
+    return () => clearTimeout(t)
+  }, [query])
+
+  // 템플릿 조회
+  const fetchTemplates = useCallback(async () => {
     setLoading(true)
-    filterTemplates(
+    const data = await filterTemplates(
       category === 'all' ? undefined : category,
-      query,
+      debouncedQ,
       stacks.length > 0 ? stacks : undefined,
       maxPrice < 100 ? maxPrice * 1000 : undefined,
-    ).then((data) => {
-      setTemplates(data)
-      setLoading(false)
-    })
-  }, [category, query, stacks, maxPrice])
+    )
+    setTemplates(data)
+    setLoading(false)
+  }, [category, debouncedQ, stacks, maxPrice])
+
+  useEffect(() => { fetchTemplates() }, [fetchTemplates])
 
   // 카테고리별 카운트
   const counts = useMemo(() => {
     const map: Record<string, number> = { all: templates.length }
-    templates.forEach((t) => {
-      map[t.category] = (map[t.category] ?? 0) + 1
-    })
+    templates.forEach((t) => { map[t.category] = (map[t.category] ?? 0) + 1 })
     return map
   }, [templates])
 
@@ -88,9 +94,7 @@ export function TemplatesClient() {
   }, [templates, sort])
 
   function toggleStack(s: string) {
-    setStacks((prev) =>
-      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
-    )
+    setStacks((prev) => prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s])
   }
 
   async function toggleWish(templateId: string, e: React.MouseEvent) {
@@ -102,6 +106,16 @@ export function TemplatesClient() {
       return next
     })
     await toggleWishDB(userId, templateId)
+  }
+
+  // 비교 토글 — 최대 3개
+  function toggleCompare(slug: string, e: React.MouseEvent) {
+    e.preventDefault()
+    setCompareList((prev) => {
+      if (prev.includes(slug)) return prev.filter((s) => s !== slug)
+      if (prev.length >= 3) { alert('최대 3개까지 비교할 수 있어요'); return prev }
+      return [...prev, slug]
+    })
   }
 
   function resetFilters() {
@@ -123,7 +137,7 @@ export function TemplatesClient() {
         <p className="text-[14px] text-sand/40 font-light mb-5">프리미엄 프론트엔드 템플릿</p>
 
         <div className="flex gap-3 items-center mb-5">
-          {/* 검색 */}
+          {/* 검색 — debounce 적용 */}
           <div className="relative flex-1">
             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sand/25 text-lg">⌕</span>
             <input
@@ -131,10 +145,18 @@ export function TemplatesClient() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="템플릿 이름, 기술 스택, 카테고리 검색..."
-              className="w-full bg-panel border border-white/10 rounded-xl py-3 pl-11 pr-4
+              className="w-full bg-panel border border-white/10 rounded-xl py-3 pl-11 pr-10
                          text-[14px] text-sand placeholder:text-sand/20
                          outline-none focus:border-lime/40 transition-colors"
             />
+            {query && (
+              <button
+                onClick={() => setQuery('')}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-sand/30
+                           hover:text-sand transition-colors cursor-pointer text-lg">
+                ✕
+              </button>
+            )}
           </div>
 
           {/* 정렬 */}
@@ -160,8 +182,7 @@ export function TemplatesClient() {
                             text-sm transition-all cursor-pointer
                   ${gridView === isGrid
                     ? 'border-lime/30 bg-lime/[0.08] text-lime'
-                    : 'border-white/10 text-sand/30 hover:border-white/20'}`}
-              >
+                    : 'border-white/10 text-sand/30 hover:border-white/20'}`}>
                 {isGrid ? '⊞' : '☰'}
               </button>
             ))}
@@ -177,8 +198,7 @@ export function TemplatesClient() {
               className={`px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 transition-all cursor-pointer
                 ${category === value
                   ? 'text-sand font-medium border-lime'
-                  : 'text-sand/40 border-transparent hover:text-sand/70'}`}
-            >
+                  : 'text-sand/40 border-transparent hover:text-sand/70'}`}>
               {label}{' '}
               <span className="text-sand/25 text-[12px]">{count}</span>
             </button>
@@ -204,8 +224,7 @@ export function TemplatesClient() {
                               text-[13px] cursor-pointer transition-all
                     ${category === value
                       ? 'bg-lime/[0.08] text-sand font-medium'
-                      : 'text-sand/50 hover:bg-white/[0.04] hover:text-sand'}`}
-                >
+                      : 'text-sand/50 hover:bg-white/[0.04] hover:text-sand'}`}>
                   <span className="flex items-center gap-2">
                     <span className={`w-2 h-2 rounded-full ${category === value ? 'bg-lime' : 'bg-white/15'}`} />
                     {label}
@@ -239,22 +258,15 @@ export function TemplatesClient() {
             <div className="space-y-1.5">
               {STACK_OPTIONS.map((s) => (
                 <label key={s} className="flex items-center gap-2.5 cursor-pointer group">
-                  <input
-                    type="checkbox"
-                    checked={stacks.includes(s)}
-                    onChange={() => toggleStack(s)}
-                    className="hidden"
-                  />
+                  <input type="checkbox" checked={stacks.includes(s)} onChange={() => toggleStack(s)} className="hidden" />
                   <span className={`w-4 h-4 rounded border flex items-center justify-center
                     flex-shrink-0 transition-all
                     ${stacks.includes(s) ? 'bg-lime border-lime' : 'bg-transparent border-white/15'}`}>
-                    {stacks.includes(s) && (
-                      <span className="text-ink text-[10px] font-bold">✓</span>
-                    )}
+                    {stacks.includes(s) && <span className="text-ink text-[10px] font-bold">✓</span>}
                   </span>
                   <span className={`text-[13px] transition-colors
                     ${stacks.includes(s) ? 'text-sand' : 'text-sand/50 group-hover:text-sand/80'}`}>
-                    {STACK_LABELS[s] ?? s}  {/* ← 라벨 맵으로 표시 */}
+                    {STACK_LABELS[s] ?? s}
                   </span>
                 </label>
               ))}
@@ -266,8 +278,7 @@ export function TemplatesClient() {
             onClick={resetFilters}
             className="w-full border border-white/[0.08] rounded-lg py-2 text-[12px]
                        text-sand/35 hover:border-white/20 hover:text-sand/70
-                       transition-all cursor-pointer"
-          >
+                       transition-all cursor-pointer">
             ↺ 필터 초기화
           </button>
         </aside>
@@ -276,28 +287,34 @@ export function TemplatesClient() {
         <div className="flex-1 px-7 pt-6 pb-16">
           <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
             <p className="text-[13px] text-sand/40">
-              <span className="text-sand font-medium">{filtered.length}</span>개 템플릿
+              {loading
+                ? '검색 중...'
+                : <><span className="text-sand font-medium">{filtered.length}</span>개 템플릿</>}
             </p>
-            {/* 활성 스택 필터 태그 */}
             <div className="flex gap-2 flex-wrap">
               {stacks.map((s) => (
-                <span
-                  key={s}
-                  onClick={() => toggleStack(s)}
+                <span key={s} onClick={() => toggleStack(s)}
                   className="flex items-center gap-1 bg-lime/10 border border-lime/20 text-lime
-                             text-[11px] px-2.5 py-1 rounded-full cursor-pointer hover:bg-lime/20 transition-colors"
-                >
-                  {STACK_LABELS[s] ?? s} ✕  {/* ← 라벨 맵으로 표시 */}
+                             text-[11px] px-2.5 py-1 rounded-full cursor-pointer hover:bg-lime/20 transition-colors">
+                  {STACK_LABELS[s] ?? s} ✕
                 </span>
               ))}
             </div>
           </div>
 
-          {/* 로딩 */}
+          {/* 로딩 스켈레톤 */}
           {loading && (
-            <div className="flex items-center justify-center py-24 text-sand/30">
-              <div className="w-6 h-6 border-2 border-lime/30 border-t-lime rounded-full animate-spin mr-3" />
-              불러오는 중...
+            <div className={`grid ${gridView ? 'grid-cols-2 md:grid-cols-3 xl:grid-cols-4' : 'grid-cols-1'} gap-4`}>
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="card-base rounded-2xl overflow-hidden animate-pulse">
+                  <div className="h-36 bg-white/[0.04]" />
+                  <div className="p-3 space-y-2">
+                    <div className="h-3 w-1/3 bg-white/[0.04] rounded" />
+                    <div className="h-4 w-2/3 bg-white/[0.06] rounded" />
+                    <div className="h-3 w-1/2 bg-white/[0.04] rounded" />
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 
@@ -306,11 +323,11 @@ export function TemplatesClient() {
             <div className="text-center py-20 text-sand/30">
               <p className="text-4xl mb-3">:(</p>
               <p className="text-[14px]">검색 결과가 없어요</p>
-              <p className="text-[12px] mt-1 mb-5">다른 키워드나 필터를 시도해보세요</p>
-              <button
-                onClick={resetFilters}
-                className="text-lime/70 hover:text-lime transition-colors text-[13px] cursor-pointer"
-              >
+              <p className="text-[12px] mt-1 mb-5">
+                {debouncedQ ? `"${debouncedQ}"에 대한 결과가 없어요` : '다른 필터를 시도해보세요'}
+              </p>
+              <button onClick={resetFilters}
+                className="text-lime/70 hover:text-lime transition-colors text-[13px] cursor-pointer">
                 필터 초기화하기
               </button>
             </div>
@@ -320,10 +337,10 @@ export function TemplatesClient() {
           {!loading && filtered.length > 0 && (
             <div className={gridView
               ? 'grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4'
-              : 'flex flex-col gap-3'}
-            >
+              : 'flex flex-col gap-3'}>
               {filtered.map((t) => (
                 <div key={t.id} className="relative group">
+
                   {/* 찜 버튼 */}
                   <button
                     onClick={(e) => toggleWish(t.id, e)}
@@ -331,12 +348,22 @@ export function TemplatesClient() {
                                flex items-center justify-center text-[13px]
                                bg-black/40 border border-white/10 transition-all cursor-pointer
                                opacity-0 group-hover:opacity-100
-                               ${wished.has(t.id)
-                                 ? 'text-[#ff5f3f] opacity-100'
-                                 : 'text-sand/60 hover:text-[#ff5f3f]'}`}
-                  >
+                               ${wished.has(t.id) ? 'text-[#ff5f3f] opacity-100' : 'text-sand/60 hover:text-[#ff5f3f]'}`}>
                     {wished.has(t.id) ? '♥' : '♡'}
                   </button>
+
+                  {/* 비교 버튼 */}
+                  <button
+                    onClick={(e) => toggleCompare(t.slug, e)}
+                    className={`absolute top-2 right-2 z-10 w-7 h-7 rounded-full
+                               flex items-center justify-center text-[11px] font-bold
+                               border transition-all cursor-pointer
+                               ${compareList.includes(t.slug)
+                                 ? 'bg-lime text-ink border-lime opacity-100'
+                                 : 'bg-black/40 border-white/10 text-sand/60 opacity-0 group-hover:opacity-100 hover:border-lime/50 hover:text-lime'}`}>
+                    {compareList.includes(t.slug) ? '✓' : '≡'}
+                  </button>
+
                   <TemplateCard template={t} />
                 </div>
               ))}
@@ -344,6 +371,39 @@ export function TemplatesClient() {
           )}
         </div>
       </div>
+
+      {/* ── 비교 플로팅 바 ── */}
+      {compareList.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50
+                        bg-[#111] border border-white/15 rounded-2xl shadow-2xl
+                        px-5 py-3 flex items-center gap-4">
+          <p className="text-[13px] text-sand/50">
+            <span className="text-sand font-medium">{compareList.length}개</span> 선택됨
+          </p>
+          <div className="flex gap-2">
+            {compareList.map((slug) => {
+              const t = filtered.find((x) => x.slug === slug)
+              return (
+                <span key={slug}
+                  className="text-[12px] bg-lime/10 border border-lime/20 text-lime px-2.5 py-1 rounded-full flex items-center gap-1">
+                  {t?.name ?? slug}
+                  <button onClick={() => setCompareList((p) => p.filter((s) => s !== slug))}
+                    className="text-lime/50 hover:text-lime cursor-pointer ml-0.5">✕</button>
+                </span>
+              )
+            })}
+          </div>
+          <Link
+            href={`/templates/compare?slugs=${compareList.join(',')}`}
+            className="btn-lime text-[13px] px-4 py-2">
+            비교하기 →
+          </Link>
+          <button onClick={() => setCompareList([])}
+            className="text-sand/30 hover:text-sand transition-colors cursor-pointer text-[13px]">
+            취소
+          </button>
+        </div>
+      )}
     </div>
   )
 }

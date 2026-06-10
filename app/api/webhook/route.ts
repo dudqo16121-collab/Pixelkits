@@ -5,10 +5,10 @@ import crypto from 'crypto'
 
 export async function POST(req: NextRequest) {
   try {
-    // ── 1. 웹훅 서명 검증 ─────────────────────────────────
-    const rawBody  = await req.text()
-    const secret   = process.env.TOSS_WEBHOOK_SECRET ?? ''
+    const rawBody = await req.text()
+    const secret  = process.env.TOSS_WEBHOOK_SECRET ?? ''
 
+    // ── 1. 서명 검증 (운영환경에서는 secret 필수) ─────────
     if (secret) {
       const signature = req.headers.get('toss-signature') ?? ''
       const expected  = crypto
@@ -17,9 +17,13 @@ export async function POST(req: NextRequest) {
         .digest('hex')
 
       if (signature !== expected) {
-        console.warn('[Webhook] 서명 불일치')
+        console.warn('[Webhook] 서명 불일치 — 요청 거부')
         return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
       }
+    } else if (process.env.NODE_ENV === 'production') {
+      // 운영환경에서 secret 없으면 차단
+      console.error('[Webhook] TOSS_WEBHOOK_SECRET 미설정 — 운영환경에서는 필수')
+      return NextResponse.json({ error: 'Webhook secret not configured' }, { status: 500 })
     }
 
     const { eventType, data } = JSON.parse(rawBody)
@@ -27,12 +31,10 @@ export async function POST(req: NextRequest) {
     // ── 2. 이벤트 타입별 처리 ─────────────────────────────
     switch (eventType) {
 
-      // 결제 완료
       case 'PAYMENT_STATUS_CHANGED': {
         const { paymentKey, orderId, status } = data
 
         if (status === 'DONE') {
-          // 주문 조회
           const { data: order } = await supabaseAdmin
             .from('orders')
             .select('id, status, user_email, order_number, amount, download_token, token_expires_at, templates(name)')
@@ -42,14 +44,9 @@ export async function POST(req: NextRequest) {
           if (order && order.status !== 'completed') {
             await supabaseAdmin
               .from('orders')
-              .update({
-                status:      'completed',
-                payment_key: paymentKey,
-                updated_at:  new Date().toISOString(),
-              })
+              .update({ status: 'completed', payment_key: paymentKey, updated_at: new Date().toISOString() })
               .eq('toss_order_id', orderId)
 
-            // 이메일 발송 (웹훅 경유 완료 처리 시)
             if (order.user_email) {
               const templateName = (order as any).templates?.name ?? '구매 템플릿'
               sendPurchaseEmail({
@@ -61,8 +58,7 @@ export async function POST(req: NextRequest) {
                 tokenExpiresAt: order.token_expires_at,
               }).catch((err) => console.error('[Webhook Email] 발송 오류:', err))
             }
-
-            console.log(`[Webhook] 결제 완료 처리: ${orderId}`)
+            console.log(`[Webhook] 결제 완료: ${orderId}`)
           }
         }
 
@@ -71,7 +67,7 @@ export async function POST(req: NextRequest) {
             .from('orders')
             .update({ status: 'refunded', updated_at: new Date().toISOString() })
             .eq('toss_order_id', orderId)
-          console.log(`[Webhook] 결제 취소 처리: ${orderId}`)
+          console.log(`[Webhook] 결제 취소: ${orderId}`)
         }
 
         if (status === 'ABORTED') {
@@ -79,12 +75,11 @@ export async function POST(req: NextRequest) {
             .from('orders')
             .update({ status: 'failed', updated_at: new Date().toISOString() })
             .eq('toss_order_id', orderId)
-          console.log(`[Webhook] 결제 실패 처리: ${orderId}`)
+          console.log(`[Webhook] 결제 실패: ${orderId}`)
         }
         break
       }
 
-      // 결제 취소 완료
       case 'PAYMENT_CANCELED': {
         const { orderId } = data
 
@@ -95,18 +90,11 @@ export async function POST(req: NextRequest) {
 
         // 프로모 코드 사용 횟수 롤백
         const { data: order } = await supabaseAdmin
-          .from('orders')
-          .select('promo_code')
-          .eq('toss_order_id', orderId)
-          .single()
+          .from('orders').select('promo_code').eq('toss_order_id', orderId).single()
 
         if (order?.promo_code) {
           const { data: promo } = await supabaseAdmin
-            .from('promo_codes')
-            .select('used_count')
-            .eq('code', order.promo_code)
-            .single()
-
+            .from('promo_codes').select('used_count').eq('code', order.promo_code).single()
           if (promo && promo.used_count > 0) {
             await supabaseAdmin
               .from('promo_codes')
@@ -114,8 +102,7 @@ export async function POST(req: NextRequest) {
               .eq('code', order.promo_code)
           }
         }
-
-        console.log(`[Webhook] 취소 완료 처리: ${orderId}`)
+        console.log(`[Webhook] 취소 완료: ${orderId}`)
         break
       }
 

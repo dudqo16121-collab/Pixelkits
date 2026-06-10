@@ -17,18 +17,22 @@ export default function SettingsPage() {
   const router   = useRouter()
   const { refreshUser } = useUser()
 
-  const [userId,      setUserId]      = useState<string | null>(null)
-  const [name,        setName]        = useState('')
-  const [email,       setEmail]       = useState('')
-  const [avatarUrl,   setAvatarUrl]   = useState('')
-  const [loading,     setLoading]     = useState(true)
-  const [saving,      setSaving]      = useState(false)
-  const [saved,       setSaved]       = useState(false)
+  const [userId,       setUserId]       = useState<string | null>(null)
+  const [name,         setName]         = useState('')
+  const [email,        setEmail]        = useState('')
+  const [avatarUrl,    setAvatarUrl]    = useState('')
+  const [loading,      setLoading]      = useState(true)
+  const [saving,       setSaving]       = useState(false)
+  const [saved,        setSaved]        = useState(false)
+  const [savingNotify, setSavingNotify] = useState(false)
+  const [savedNotify,  setSavedNotify]  = useState(false)
   const [uploadingImg, setUploadingImg] = useState(false)
-  const [pwForm,      setPwForm]      = useState({ current: '', next: '', confirm: '' })
-  const [pwMsg,       setPwMsg]       = useState('')
-  const [notify,      setNotify]      = useState({
-    new_template: true, order: true, newsletter: false,
+  const [pwForm,       setPwForm]       = useState({ next: '', confirm: '' })
+  const [pwMsg,        setPwMsg]        = useState('')
+  const [notify,       setNotify]       = useState({
+    new_template: true,
+    order:        true,
+    newsletter:   false,
   })
 
   useEffect(() => {
@@ -54,7 +58,7 @@ export default function SettingsPage() {
         .from('notification_settings')
         .select('*')
         .eq('user_id', user.id)
-        .single()
+        .maybeSingle()
 
       if (notifData) {
         setNotify({
@@ -85,7 +89,6 @@ export default function SettingsPage() {
     if (upErr) { alert('업로드에 실패했어요: ' + upErr.message); setUploadingImg(false); return }
 
     const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(path)
-
     await supabase.from('profiles').upsert({ id: userId, avatar_url: publicUrl })
     setAvatarUrl(publicUrl)
     await refreshUser()
@@ -101,23 +104,34 @@ export default function SettingsPage() {
     await refreshUser()
   }
 
+  // ── 프로필 저장 (이름만) ─────────────────────────────
   async function saveProfile() {
     if (!userId) return
     setSaving(true)
-
     await supabase.from('profiles').upsert({ id: userId, name })
-
-    await supabase.from('notification_settings').upsert({
-      user_id:      userId,
-      new_template: notify.new_template,
-      order_update: notify.order,
-      newsletter:   notify.newsletter,
-    })
-
     setSaving(false)
     setSaved(true)
     await refreshUser()
     setTimeout(() => setSaved(false), 2500)
+  }
+
+  // ── 알림 설정 저장 (분리) ────────────────────────────
+  async function saveNotifications() {
+    if (!userId) return
+    setSavingNotify(true)
+    const { error } = await supabase
+      .from('notification_settings')
+      .upsert({
+        user_id:      userId,
+        new_template: notify.new_template,
+        order_update: notify.order,
+        newsletter:   notify.newsletter,
+        updated_at:   new Date().toISOString(),
+      })
+    setSavingNotify(false)
+    if (error) { alert('알림 설정 저장에 실패했어요: ' + error.message); return }
+    setSavedNotify(true)
+    setTimeout(() => setSavedNotify(false), 2500)
   }
 
   async function changePassword() {
@@ -130,7 +144,7 @@ export default function SettingsPage() {
       setPwMsg('비밀번호 변경에 실패했어요')
     } else {
       setPwMsg('비밀번호가 변경됐어요!')
-      setPwForm({ current: '', next: '', confirm: '' })
+      setPwForm({ next: '', confirm: '' })
     }
     setTimeout(() => setPwMsg(''), 3000)
   }
@@ -139,7 +153,7 @@ export default function SettingsPage() {
     if (!confirm('정말 계정을 삭제할까요? 구매 내역과 다운로드 권한도 모두 사라져요.')) return
     const { data: { session } } = await supabase.auth.getSession()
     const res = await fetch('/api/user/delete', {
-      method: 'POST',
+      method:  'POST',
       headers: { Authorization: `Bearer ${session?.access_token}` },
     })
     const data = await res.json()
@@ -152,8 +166,7 @@ export default function SettingsPage() {
 
   if (loading) return (
     <div className="flex items-center justify-center min-h-[60vh] text-sand/30">
-      <div className="w-6 h-6 border-2 border-lime/30 border-t-lime rounded-full animate-spin mr-3" />
-      불러오는 중...
+      <div className="w-5 h-5 border-2 border-lime/30 border-t-lime rounded-full animate-spin" />
     </div>
   )
 
@@ -163,14 +176,14 @@ export default function SettingsPage() {
       {/* ── 사이드바 ── */}
       <aside className="p-6 border-r border-white/[0.07]">
         <div className="card-base rounded-xl p-4 flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 rounded-full bg-lime/12 border border-lime/25
-                          flex items-center justify-center font-syne font-bold text-lime overflow-hidden flex-shrink-0">
+          <div className="w-10 h-10 rounded-full bg-lime/12 border border-lime/25 overflow-hidden
+                          flex items-center justify-center font-syne font-bold text-lime">
             {avatarUrl
               ? <img src={avatarUrl} alt="프로필" className="w-full h-full object-cover" />
               : initial}
           </div>
           <div>
-            <p className="text-[13px] font-medium truncate">{name || '이름 없음'}</p>
+            <p className="text-[13px] font-medium">{name || '이름 없음'}</p>
             <p className="text-[11px] text-sand/35 truncate">{email}</p>
           </div>
         </div>
@@ -187,19 +200,18 @@ export default function SettingsPage() {
         </div>
       </aside>
 
-      {/* ── 콘텐츠 ── */}
+      {/* ── 본문 ── */}
       <div className="p-8 max-w-2xl">
-        <h1 className="font-syne font-extrabold text-2xl tracking-tight mb-8">계정 설정</h1>
+        <h1 className="font-syne font-extrabold text-2xl tracking-tight mb-7">계정 설정</h1>
 
         {/* 프로필 */}
         <section className="card-base rounded-2xl p-6 mb-5">
           <h2 className="font-syne font-bold text-[15px] mb-5">프로필</h2>
 
           {/* 아바타 */}
-          <div className="flex items-center gap-4 mb-6">
-            <div className="w-16 h-16 rounded-full bg-lime/12 border border-lime/25
-                            flex items-center justify-center font-syne font-extrabold text-lime text-xl
-                            overflow-hidden flex-shrink-0">
+          <div className="flex items-center gap-4 mb-5">
+            <div className="w-16 h-16 rounded-full bg-lime/12 border border-lime/25 overflow-hidden
+                            flex items-center justify-center font-syne font-extrabold text-lime text-xl flex-shrink-0">
               {avatarUrl
                 ? <img src={avatarUrl} alt="프로필" className="w-full h-full object-cover" />
                 : initial}
@@ -214,8 +226,7 @@ export default function SettingsPage() {
                   <input type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
                 </label>
                 {avatarUrl && (
-                  <button
-                    onClick={handleAvatarDelete}
+                  <button onClick={handleAvatarDelete}
                     className="text-[12px] text-sand/30 hover:text-[#ff5f3f] transition-colors cursor-pointer">
                     삭제
                   </button>
@@ -225,12 +236,11 @@ export default function SettingsPage() {
           </div>
 
           {/* 이름 / 이메일 */}
-          <div className="space-y-4">
+          <div className="space-y-4 mb-5">
             <div>
               <label className="text-[12px] text-sand/45 mb-1.5 block">이름</label>
               <input
-                type="text" value={name}
-                onChange={(e) => setName(e.target.value)}
+                type="text" value={name} onChange={(e) => setName(e.target.value)}
                 placeholder="이름 입력"
                 className="w-full bg-[#0d0d0d] border border-white/10 rounded-xl px-4 py-3
                            text-[14px] text-sand outline-none focus:border-lime/40 transition-colors"
@@ -247,7 +257,7 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 mt-5">
+          <div className="flex items-center gap-3">
             <button onClick={saveProfile} disabled={saving}
               className="btn-lime text-[13px] px-5 py-2.5 disabled:opacity-40">
               {saving ? '저장 중...' : saved ? '✓ 저장됨' : '변경사항 저장'}
@@ -277,7 +287,6 @@ export default function SettingsPage() {
               </div>
             ))}
           </div>
-
           {pwMsg && (
             <p className={`text-[12px] mt-3 px-3 py-2 rounded-lg border
               ${pwMsg.includes('변경됐어요')
@@ -286,7 +295,6 @@ export default function SettingsPage() {
               {pwMsg}
             </p>
           )}
-
           <button onClick={changePassword} className="btn-lime text-[13px] px-5 py-2.5 mt-5">
             비밀번호 변경
           </button>
@@ -299,7 +307,7 @@ export default function SettingsPage() {
             {[
               { key: 'new_template', label: '새 템플릿 출시 알림', sub: '새 템플릿 등록 시 이메일 알림' },
               { key: 'order',        label: '구매 · 결제 알림',    sub: '결제 완료, 환불 처리 시 알림' },
-              { key: 'newsletter',   label: '뉴스레터',             sub: '프로모션, 업데이트 소식' },
+              { key: 'newsletter',   label: '뉴스레터',             sub: '프로모션, 업데이트 소식'      },
             ].map(({ key, label, sub }) => (
               <div key={key}
                 className="flex items-center justify-between gap-4 py-2 border-b border-white/[0.06] last:border-0">
@@ -317,10 +325,13 @@ export default function SettingsPage() {
               </div>
             ))}
           </div>
-          <button onClick={saveProfile} disabled={saving}
-            className="btn-lime text-[13px] px-5 py-2.5 mt-5 disabled:opacity-40">
-            {saving ? '저장 중...' : '알림 설정 저장'}
-          </button>
+          <div className="flex items-center gap-3 mt-5">
+            <button onClick={saveNotifications} disabled={savingNotify}
+              className="btn-lime text-[13px] px-5 py-2.5 disabled:opacity-40">
+              {savingNotify ? '저장 중...' : savedNotify ? '✓ 저장됨' : '알림 설정 저장'}
+            </button>
+            {savedNotify && <span className="text-[13px] text-teal">저장되었어요!</span>}
+          </div>
         </section>
 
         {/* 계정 삭제 */}

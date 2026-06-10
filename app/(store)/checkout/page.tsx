@@ -144,7 +144,8 @@ export default function CheckoutPage() {
         router.push(
           `/checkout/success?orderId=${fakeOrderId}&amount=0` +
           `&template=${slug}&paymentKey=FREE` +
-          `&customerEmail=${encodeURIComponent(email)}`
+          `&customerEmail=${encodeURIComponent(email)}` +
+          `&dbOrderId=${data.orderId}`
         )
         return
       }

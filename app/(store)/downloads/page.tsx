@@ -45,6 +45,8 @@ export default function DownloadsPage() {
 
   return (
     <div className="grid md:grid-cols-[220px_1fr] min-h-[calc(100vh-57px)]">
+
+      {/* ── 사이드바 ── */}
       <aside className="p-6 border-r border-white/[0.07]">
         <div className="card-base rounded-xl p-4 flex items-center gap-3 mb-6">
           <div className="w-10 h-10 rounded-full bg-lime/12 border border-lime/25
@@ -69,10 +71,12 @@ export default function DownloadsPage() {
         </div>
       </aside>
 
+      {/* ── 본문 ── */}
       <div className="p-8">
         <h1 className="font-syne font-extrabold text-2xl tracking-tight mb-2">다운로드</h1>
         <p className="text-[14px] text-sand/40 font-light mb-7">구매한 템플릿 파일을 다운로드하세요</p>
 
+        {/* 로딩 */}
         {loading && (
           <div className="flex items-center gap-3 py-16 justify-center text-sand/30">
             <div className="w-5 h-5 border-2 border-lime/30 border-t-lime rounded-full animate-spin" />
@@ -80,6 +84,7 @@ export default function DownloadsPage() {
           </div>
         )}
 
+        {/* 빈 상태 */}
         {!loading && orders.length === 0 && (
           <div className="text-center py-20 text-sand/30">
             <p className="text-4xl mb-4">📁</p>
@@ -88,14 +93,16 @@ export default function DownloadsPage() {
           </div>
         )}
 
+        {/* ── 주문별 다운로드 카드 ── */}
         {!loading && orders.length > 0 && (
           <div className="space-y-4">
             {orders.map((order) => {
-              const tmpl         = order.templates
-              const isExpired    = new Date(order.token_expires_at) < new Date()
-              const currentCount = order.download_count    ?? 0
-              const maxCount     = order.max_download_count ?? 5
-              const isExhausted  = currentCount >= maxCount
+              const tmpl           = order.templates
+              const isExpired      = new Date(order.token_expires_at) < new Date()
+              const currentCount   = order.download_count    ?? 0
+              const maxCount       = order.max_download_count ?? 5
+              const isExhausted    = currentCount >= maxCount
+              const isFullyRefunded = order.status === 'refunded' // ← 전액환불만 차단
 
               const files = [
                 { icon: '🗜', name: `${tmpl?.slug ?? 'template'}-v1.zip`, size: '소스코드 ZIP', type: 'source'  },
@@ -105,6 +112,8 @@ export default function DownloadsPage() {
 
               return (
                 <div key={order.id} className="card-base rounded-2xl p-6">
+
+                  {/* 상단 정보 */}
                   <div className="flex items-start gap-4 mb-5">
                     <div className="w-16 h-12 rounded-xl bg-gradient-to-br from-[#0d1b2a] to-[#1e3a5f]
                                     border border-white/10 flex-shrink-0" />
@@ -115,25 +124,47 @@ export default function DownloadsPage() {
                         <span>·</span>
                         <span>#{order.order_number}</span>
                         <span>·</span>
-                        <span className={isExpired ? 'text-[#ff5f3f]/70' : 'text-teal'}>
-                          {isExpired ? '링크 만료됨' : `${formatDate(order.token_expires_at)}까지 유효`}
-                        </span>
-                        <span className={`text-[11px] px-2 py-0.5 rounded-full border ${
-                          isExhausted
-                            ? 'text-[#ff5f3f]/70 border-[#ff5f3f]/20'
-                            : 'text-sand/40 border-white/10'
-                        }`}>
-                          {currentCount}/{maxCount}회 사용
-                        </span>
+                        {isFullyRefunded ? (
+                          <span className="text-[#ff5f3f]/70">전액 환불됨</span>
+                        ) : (
+                          <span className={isExpired ? 'text-[#ff5f3f]/70' : 'text-teal'}>
+                            {isExpired
+                              ? '링크 만료됨'
+                              : `${formatDate(order.token_expires_at)}까지 유효`}
+                          </span>
+                        )}
+                        {/* 부분환불 뱃지 */}
+                        {order.status === 'partial_refund' && (
+                          <span className="text-[11px] px-2 py-0.5 rounded-full border
+                                           text-amber-400 border-amber-500/20">
+                            부분환불
+                          </span>
+                        )}
+                        {/* 횟수 표시 — 전액환불 아닐 때만 */}
+                        {!isFullyRefunded && (
+                          <span className={`text-[11px] px-2 py-0.5 rounded-full border ${
+                            isExhausted
+                              ? 'text-[#ff5f3f]/70 border-[#ff5f3f]/20'
+                              : 'text-sand/40 border-white/10'
+                          }`}>
+                            {currentCount}/{maxCount}회 사용
+                          </span>
+                        )}
                       </div>
                     </div>
                     <span className="badge-lime text-[11px]">최신 버전</span>
                   </div>
 
+                  {/* 파일 목록 */}
                   <div className="space-y-2 mb-4">
                     {files.map(({ icon, name, size, type }) => {
-                      const key        = order.id + type
-                      const isDisabled = isExpired || (isExhausted && type === 'source')
+                      const key = order.id + type
+                      // 전액환불이거나, 만료됐거나, source인데 횟수 초과면 비활성
+                      const isDisabled =
+                        isFullyRefunded ||
+                        isExpired ||
+                        (isExhausted && type === 'source')
+
                       return (
                         <div key={type}
                           className="flex items-center gap-3 bg-white/[0.03] border border-white/[0.06] rounded-xl p-3">
@@ -147,7 +178,7 @@ export default function DownloadsPage() {
                           </div>
                           {isDisabled ? (
                             <span className="text-[12px] text-sand/25 px-3 py-1.5">
-                              {isExpired ? '만료됨' : '횟수 초과'}
+                              {isFullyRefunded ? '환불됨' : isExpired ? '만료됨' : '횟수 초과'}
                             </span>
                           ) : (
                             <button
@@ -164,8 +195,15 @@ export default function DownloadsPage() {
                     })}
                   </div>
 
+                  {/* 하단 버튼 */}
                   <div className="flex gap-2">
-                    {(isExpired || isExhausted) ? (
+                    {isFullyRefunded ? (
+                      // 전액환불 — 다운로드 불가 안내
+                      <p className="text-[12px] text-sand/30 py-2.5">
+                        전액 환불된 주문이에요. 다운로드를 원하시면 다시 구매해주세요.
+                      </p>
+                    ) : (isExpired || isExhausted) ? (
+                      // 만료 또는 횟수 초과 — 재발급
                       <button
                         onClick={() => refreshToken(order.id)}
                         disabled={refreshing === order.id}
@@ -173,6 +211,7 @@ export default function DownloadsPage() {
                         {refreshing === order.id ? '재발급 중...' : '↻ 링크 재발급 (72시간 · 5회)'}
                       </button>
                     ) : (
+                      // 정상 — 전체 다운로드
                       <button
                         onClick={() => handleDownload(order.id, 'all')}
                         disabled={downloading === order.id + 'all'}
@@ -181,6 +220,7 @@ export default function DownloadsPage() {
                       </button>
                     )}
                   </div>
+
                 </div>
               )
             })}

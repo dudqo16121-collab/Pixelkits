@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
     const ip         = getIP(req)
     const authHeader = req.headers.get('Authorization')
     const rlKey      = authHeader ? `payment:${authHeader.slice(-12)}` : `payment:${ip}`
-    const rl         = rateLimit(rlKey, 5, 60_000)
+    const rl = await rateLimit(rlKey, 5, 60_000)
 
     if (!rl.allowed) {
       return NextResponse.json(

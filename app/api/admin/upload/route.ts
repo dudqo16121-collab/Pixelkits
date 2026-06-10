@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { rateLimit, getIP } from '@/lib/rateLimit'
 
-// 관리자 확인 헬퍼
 async function checkAdmin(req: NextRequest) {
   const token = req.headers.get('Authorization')?.replace('Bearer ', '')
   if (!token) return null
@@ -18,15 +18,27 @@ async function checkAdmin(req: NextRequest) {
 // POST /api/admin/upload
 // FormData: { file: File, bucket: 'thumbnails'|'templates', path: string }
 export async function POST(req: NextRequest) {
+  // ── Rate Limiting ─────────────────────────────────────
+  const ip = getIP(req)
+  const rl = await rateLimit(`upload:${ip}`, 30, 60_000) // 1분에 30회
+
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: '업로드 요청이 너무 많아요. 잠시 후 다시 시도해주세요.' },
+      { status: 429 }
+    )
+  }
+
+  // ── 관리자 확인 ───────────────────────────────────────
   const admin = await checkAdmin(req)
   if (!admin) {
     return NextResponse.json({ error: '관리자 권한이 필요해요' }, { status: 403 })
   }
 
   const formData = await req.formData()
-  const file   = formData.get('file') as File | null
+  const file   = formData.get('file')   as File   | null
   const bucket = formData.get('bucket') as string | null
-  const path   = formData.get('path') as string | null
+  const path   = formData.get('path')   as string | null
 
   if (!file || !bucket || !path) {
     return NextResponse.json({ error: '필수 값이 없어요 (file, bucket, path)' }, { status: 400 })
